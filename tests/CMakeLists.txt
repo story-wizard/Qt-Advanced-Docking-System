@@ -15,21 +15,26 @@ find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Gui Widgets Test REQUIRED)
 
 set(library_name "qtadvanceddocking-qt${QT_VERSION_MAJOR}")
 
-add_executable(QuadrantHitTestTest QuadrantHitTestTest.cpp)
-set_target_properties(QuadrantHitTestTest PROPERTIES
-    AUTOMOC ON
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-target_link_libraries(QuadrantHitTestTest PRIVATE
-    ${library_name}
-    Qt${QT_VERSION_MAJOR}::Test
-    Qt${QT_VERSION_MAJOR}::Core
-    Qt${QT_VERSION_MAJOR}::Gui
-    Qt${QT_VERSION_MAJOR}::Widgets
-)
-target_include_directories(QuadrantHitTestTest PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../src"
-)
+function(add_ads_qt_test target)
+    add_executable(${target} ${ARGN})
+    set_target_properties(${target} PROPERTIES
+        AUTOMOC ON
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    target_link_libraries(${target} PRIVATE
+        ${library_name}
+        Qt${QT_VERSION_MAJOR}::Test
+        Qt${QT_VERSION_MAJOR}::Core
+        Qt${QT_VERSION_MAJOR}::Gui
+        Qt${QT_VERSION_MAJOR}::Widgets
+    )
+    target_include_directories(${target} PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src"
+    )
 
-add_test(NAME QuadrantHitTestTest COMMAND QuadrantHitTestTest)
+    add_test(NAME ${target} COMMAND ${target})
+endfunction()
+
+add_ads_qt_test(QuadrantHitTestTest QuadrantHitTestTest.cpp)
+add_ads_qt_test(OverlayGateTest OverlayGateTest.cpp)

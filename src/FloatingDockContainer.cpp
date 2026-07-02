@@ -38,7 +38,9 @@
 #include <QDebug>
 #include <QAbstractButton>
 #include <QElapsedTimer>
+#include <QKeyEvent>
 #include <QTime>
+#include <QTimer>
 
 #include "DockContainerWidget.h"
 #include "DockAreaWidget.h"
@@ -52,6 +54,9 @@
 #pragma comment(lib, "User32.lib")
 #endif
 #endif
+#ifdef Q_OS_MACOS
+#include <ApplicationServices/ApplicationServices.h>
+#endif
 #if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
 #include "linux/FloatingWidgetTitleBar.h"
 #include <xcb/xcb.h>
@@ -59,6 +64,13 @@
 
 namespace ads
 {
+#ifdef Q_OS_MACOS
+// 16 ms is roughly 60 Hz: responsive enough for Escape cancellation while a
+// native window drag is running, without busy polling.
+static constexpr int EscapeKeyPollIntervalMs = 16;
+static constexpr CGKeyCode EscapeKeyCode = 53;
+#endif
+
 #ifdef Q_OS_WIN
 #if 0 // set to 1 if you need this function for debugging
 /**
@@ -348,7 +360,7 @@ static const char* windowsMessageString(int MessageId)
     case 904: return "WM_PENEVENT";
     case 911: return "WM_PENWINLAST";
     default:
-    	return "unknown WM_ message";
+	return "unknown WM_ message";
 	}
 
 	return "unknown WM_ message";
@@ -375,6 +387,9 @@ struct FloatingDockContainerPrivate
 	bool Hiding = false;
 	bool AutoHideChildren = true;
 	bool HideContentOnNextHide = false;
+#ifdef Q_OS_MACOS
+	QTimer* EscapeKeyPollTimer = nullptr;
+#endif
 #if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
     QWidget* MouseEventHandler = nullptr;
     CFloatingWidgetTitleBar* TitleBar = nullptr;
@@ -418,6 +433,16 @@ struct FloatingDockContainerPrivate
 		}
 
 		DraggingState = StateId;
+#ifdef Q_OS_MACOS
+		if (DraggingFloatingWidget == DraggingState)
+		{
+			startEscapeKeyPolling();
+		}
+		else
+		{
+			stopEscapeKeyPolling();
+		}
+#endif
         if (DraggingFloatingWidget == DraggingState)
         {
             qApp->postEvent(_this, new QEvent((QEvent::Type)internal::FloatingWidgetDragStartEvent));
@@ -469,6 +494,14 @@ struct FloatingDockContainerPrivate
 	 */
 	void handleEscapeKey();
 
+#ifdef Q_OS_MACOS
+	void initializeEscapeKeyPolling();
+	void startEscapeKeyPolling();
+	void stopEscapeKeyPolling();
+	void pollEscapeKey();
+	static bool isEscapeKeyPressed();
+#endif
+
 	/**
 	 * Returns the title used by all FloatingContainer that does not
 	 * reflect the title of the current dock widget.
@@ -488,13 +521,23 @@ FloatingDockContainerPrivate::FloatingDockContainerPrivate(
     CFloatingDockContainer *_public) :
 	_this(_public)
 {
-
 }
 
 //============================================================================
 void FloatingDockContainerPrivate::titleMouseReleaseEvent()
 {
 	setState(DraggingInactive);
+	if (!DockManager || !DockManager->dropOverlaysEnabled())
+	{
+		if (DockManager)
+		{
+			DockManager->containerOverlay()->hideOverlay();
+			DockManager->dockAreaOverlay()->hideOverlay();
+		}
+		DropContainer = nullptr;
+		return;
+	}
+
 	if (!DropContainer)
 	{
 		return;
@@ -558,6 +601,16 @@ void FloatingDockContainerPrivate::updateDropOverlays(const QPoint &GlobalPos)
     }
 #endif
 
+	auto ContainerOverlay = DockManager->containerOverlay();
+	auto DockAreaOverlay = DockManager->dockAreaOverlay();
+	if (!DockManager->dropOverlaysEnabled())
+	{
+		DropContainer = nullptr;
+		ContainerOverlay->hideOverlay();
+		DockAreaOverlay->hideOverlay();
+		return;
+	}
+
 	auto Containers = DockManager->dockContainers();
 	CDockContainerWidget *TopContainer = nullptr;
 	for (auto ContainerWidget : Containers)
@@ -583,9 +636,6 @@ void FloatingDockContainerPrivate::updateDropOverlays(const QPoint &GlobalPos)
 	}
 
 	DropContainer = TopContainer;
-	auto ContainerOverlay = DockManager->containerOverlay();
-	auto DockAreaOverlay = DockManager->dockAreaOverlay();
-
 	if (!TopContainer)
 	{
 		ContainerOverlay->hideOverlay();
@@ -647,9 +697,79 @@ void FloatingDockContainerPrivate::handleEscapeKey()
 {
 	ADS_PRINT("FloatingDockContainerPrivate::handleEscapeKey()");
 	setState(DraggingInactive);
-	DockManager->containerOverlay()->hideOverlay();
-	DockManager->dockAreaOverlay()->hideOverlay();
+	DropContainer = nullptr;
+	if (DockManager)
+	{
+		DockManager->containerOverlay()->hideOverlay();
+		DockManager->dockAreaOverlay()->hideOverlay();
+	}
+	qApp->postEvent(_this, new QEvent((QEvent::Type)internal::FloatingWidgetDragCancelEvent));
 }
+
+#ifdef Q_OS_MACOS
+//============================================================================
+void FloatingDockContainerPrivate::initializeEscapeKeyPolling()
+{
+	if (EscapeKeyPollTimer)
+	{
+		return;
+	}
+
+	EscapeKeyPollTimer = new QTimer(_this);
+	EscapeKeyPollTimer->setInterval(EscapeKeyPollIntervalMs);
+	EscapeKeyPollTimer->setTimerType(Qt::PreciseTimer);
+	QObject::connect(EscapeKeyPollTimer, &QTimer::timeout, _this, [this]()
+	{
+		pollEscapeKey();
+	});
+}
+
+
+//============================================================================
+void FloatingDockContainerPrivate::startEscapeKeyPolling()
+{
+	if (EscapeKeyPollTimer && !EscapeKeyPollTimer->isActive())
+	{
+		EscapeKeyPollTimer->start();
+	}
+}
+
+
+//============================================================================
+void FloatingDockContainerPrivate::stopEscapeKeyPolling()
+{
+	if (EscapeKeyPollTimer)
+	{
+		EscapeKeyPollTimer->stop();
+	}
+}
+
+
+//============================================================================
+void FloatingDockContainerPrivate::pollEscapeKey()
+{
+	// The Qt KeyPress handler is used when native drags deliver key events;
+	// this poll is the macOS fallback for drags that do not.
+	if (isState(DraggingFloatingWidget) && isEscapeKeyPressed())
+	{
+		handleEscapeKey();
+	}
+}
+
+
+//============================================================================
+bool FloatingDockContainerPrivate::isEscapeKeyPressed()
+{
+	// CGEventSourceKeyState samples the global Escape key state. Poll only while
+	// this window is actively dragging, and only for the single hard-coded key.
+	if (QApplication::applicationState() != Qt::ApplicationActive)
+	{
+		return false;
+	}
+
+	return CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, EscapeKeyCode);
+}
+#endif
 
 
 //============================================================================
@@ -657,6 +777,9 @@ CFloatingDockContainer::CFloatingDockContainer(CDockManager *DockManager) :
 	tFloatingWidgetBase(DockManager),
 	d(new FloatingDockContainerPrivate(this))
 {
+#ifdef Q_OS_MACOS
+	d->initializeEscapeKeyPolling();
+#endif
 	d->DockManager = DockManager;
 	d->DockContainer = new CDockContainerWidget(DockManager, this);
 	connect(d->DockContainer, SIGNAL(dockAreasAdded()), this,
@@ -749,7 +872,7 @@ CFloatingDockContainer::CFloatingDockContainer(CDockAreaWidget *DockArea) :
     auto TopLevelDockWidget = topLevelDockWidget();
     if (TopLevelDockWidget)
     {
-    	TopLevelDockWidget->emitTopLevelChanged(true);
+	TopLevelDockWidget->emitTopLevelChanged(true);
     }
 
     d->DockManager->notifyWidgetOrAreaRelocation(DockArea);
@@ -763,7 +886,7 @@ CFloatingDockContainer::CFloatingDockContainer(CDockWidget *DockWidget) :
     auto TopLevelDockWidget = topLevelDockWidget();
     if (TopLevelDockWidget)
     {
-    	TopLevelDockWidget->emitTopLevelChanged(true);
+	TopLevelDockWidget->emitTopLevelChanged(true);
     }
 
     d->DockManager->notifyWidgetOrAreaRelocation(DockWidget);
@@ -968,7 +1091,7 @@ void CFloatingDockContainer::closeEvent(QCloseEvent *event)
 	// embedded native/web process can trigger delayed hide/show cycles on the
 	// floating window. If every non-spontaneous hide propagates to
 	// DockWidget->toggleView(false), unrelated tabs are marked closed and seem
-	// to "disappear". We therefore arm HideContentOnNextHide only for the 
+	// to "disappear". We therefore arm HideContentOnNextHide only for the
 	// explicit close path.
 	d->HideContentOnNextHide = true;
 
@@ -1101,6 +1224,18 @@ void CFloatingDockContainer::moveFloating()
 }
 
 //============================================================================
+void CFloatingDockContainer::refreshDropOverlays()
+{
+	if (d->isState(DraggingFloatingWidget))
+	{
+		d->updateDropOverlays(QCursor::pos());
+#ifdef Q_OS_MACOS
+		activateWindow();
+#endif
+	}
+}
+
+//============================================================================
 bool CFloatingDockContainer::isClosable() const
 {
 	return d->DockContainer->features().testFlag(
@@ -1208,7 +1343,7 @@ QList<CDockWidget*> CFloatingDockContainer::dockWidgets() const
 //============================================================================
 void CFloatingDockContainer::finishDropOperation()
 {
-	// Widget has been redocked, so it must be hidden right way (see 
+	// Widget has been redocked, so it must be hidden right way (see
 	// https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System/issues/351)
 	// but AutoHideChildren must be set to false because "this" still contains
 	// dock widgets that shall not be toggled hidden.
@@ -1248,6 +1383,17 @@ void CFloatingDockContainer::finishDragging()
 //============================================================================
 bool CFloatingDockContainer::event(QEvent *e)
 {
+	if (d->isState(DraggingFloatingWidget) && e->type() == QEvent::KeyPress)
+	{
+		auto KeyEvent = static_cast<QKeyEvent*>(e);
+		if (KeyEvent->key() == Qt::Key_Escape)
+		{
+			d->handleEscapeKey();
+			e->accept();
+			return true;
+		}
+	}
+
 	switch (d->DraggingState)
 	{
 	case DraggingInactive:
