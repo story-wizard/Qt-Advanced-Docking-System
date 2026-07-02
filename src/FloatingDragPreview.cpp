@@ -376,6 +376,7 @@ void CFloatingDragPreview::moveFloating()
 //============================================================================
 void CFloatingDragPreview::refreshDropOverlays()
 {
+	// updateDropOverlays() owns the visibility/manager/gate guards for previews.
 	d->updateDropOverlays(QCursor::pos());
 }
 

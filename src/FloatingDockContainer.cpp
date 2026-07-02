@@ -65,6 +65,8 @@
 namespace ads
 {
 #ifdef Q_OS_MACOS
+// 16 ms is roughly 60 Hz: responsive enough for Escape cancellation while a
+// native window drag is running, without busy polling.
 static constexpr int EscapeKeyPollIntervalMs = 16;
 static constexpr CGKeyCode EscapeKeyCode = 53;
 #endif
@@ -760,6 +762,11 @@ bool FloatingDockContainerPrivate::isEscapeKeyPressed()
 {
 	// CGEventSourceKeyState samples the global Escape key state. Poll only while
 	// this window is actively dragging, and only for the single hard-coded key.
+	if (QApplication::applicationState() != Qt::ApplicationActive)
+	{
+		return false;
+	}
+
 	return CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, EscapeKeyCode);
 }
 #endif
