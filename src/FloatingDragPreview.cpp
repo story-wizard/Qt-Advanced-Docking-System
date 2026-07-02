@@ -67,6 +67,8 @@ struct FloatingDragPreviewPrivate
 		Q_EMIT _this->draggingCanceled();
 		DockManager->containerOverlay()->hideOverlay();
 		DockManager->dockAreaOverlay()->hideOverlay();
+		// Post before close(): WA_DeleteOnClose queues destruction after events
+		// already posted to this preview, so the host can observe cancellation.
 		qApp->postEvent(_this, new QEvent((QEvent::Type)internal::FloatingWidgetDragCancelEvent));
 		_this->close();
 	}
@@ -124,6 +126,20 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 		return;
 	}
 
+	auto ContainerOverlay = DockManager->containerOverlay();
+	auto DockAreaOverlay = DockManager->dockAreaOverlay();
+	if (!DockManager->dropOverlaysEnabled())
+	{
+		DropContainer = nullptr;
+		ContainerOverlay->hideOverlay();
+		DockAreaOverlay->hideOverlay();
+		if (CDockManager::testConfigFlag(CDockManager::DragPreviewIsDynamic))
+		{
+			setHidden(false);
+		}
+		return;
+	}
+
 	auto Containers = DockManager->dockContainers();
 	CDockContainerWidget *TopContainer = nullptr;
 	for (auto ContainerWidget : Containers)
@@ -144,20 +160,6 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 	}
 
 	DropContainer = TopContainer;
-	auto ContainerOverlay = DockManager->containerOverlay();
-	auto DockAreaOverlay = DockManager->dockAreaOverlay();
-	if (!DockManager->dropOverlaysEnabled())
-	{
-		DropContainer = nullptr;
-		ContainerOverlay->hideOverlay();
-		DockAreaOverlay->hideOverlay();
-		if (CDockManager::testConfigFlag(CDockManager::DragPreviewIsDynamic))
-		{
-			setHidden(false);
-		}
-		return;
-	}
-
 	if (!TopContainer)
 	{
 		ContainerOverlay->hideOverlay();

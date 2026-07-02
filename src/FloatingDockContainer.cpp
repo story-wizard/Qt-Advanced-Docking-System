@@ -64,6 +64,11 @@
 
 namespace ads
 {
+#ifdef Q_OS_MACOS
+static constexpr int EscapeKeyPollIntervalMs = 16;
+static constexpr CGKeyCode EscapeKeyCode = 53;
+#endif
+
 #ifdef Q_OS_WIN
 #if 0 // set to 1 if you need this function for debugging
 /**
@@ -594,6 +599,16 @@ void FloatingDockContainerPrivate::updateDropOverlays(const QPoint &GlobalPos)
     }
 #endif
 
+	auto ContainerOverlay = DockManager->containerOverlay();
+	auto DockAreaOverlay = DockManager->dockAreaOverlay();
+	if (!DockManager->dropOverlaysEnabled())
+	{
+		DropContainer = nullptr;
+		ContainerOverlay->hideOverlay();
+		DockAreaOverlay->hideOverlay();
+		return;
+	}
+
 	auto Containers = DockManager->dockContainers();
 	CDockContainerWidget *TopContainer = nullptr;
 	for (auto ContainerWidget : Containers)
@@ -619,16 +634,6 @@ void FloatingDockContainerPrivate::updateDropOverlays(const QPoint &GlobalPos)
 	}
 
 	DropContainer = TopContainer;
-	auto ContainerOverlay = DockManager->containerOverlay();
-	auto DockAreaOverlay = DockManager->dockAreaOverlay();
-	if (!DockManager->dropOverlaysEnabled())
-	{
-		DropContainer = nullptr;
-		ContainerOverlay->hideOverlay();
-		DockAreaOverlay->hideOverlay();
-		return;
-	}
-
 	if (!TopContainer)
 	{
 		ContainerOverlay->hideOverlay();
@@ -709,7 +714,7 @@ void FloatingDockContainerPrivate::initializeEscapeKeyPolling()
 	}
 
 	EscapeKeyPollTimer = new QTimer(_this);
-	EscapeKeyPollTimer->setInterval(16);
+	EscapeKeyPollTimer->setInterval(EscapeKeyPollIntervalMs);
 	EscapeKeyPollTimer->setTimerType(Qt::PreciseTimer);
 	QObject::connect(EscapeKeyPollTimer, &QTimer::timeout, _this, [this]()
 	{
@@ -741,6 +746,8 @@ void FloatingDockContainerPrivate::stopEscapeKeyPolling()
 //============================================================================
 void FloatingDockContainerPrivate::pollEscapeKey()
 {
+	// The Qt KeyPress handler is used when native drags deliver key events;
+	// this poll is the macOS fallback for drags that do not.
 	if (isState(DraggingFloatingWidget) && isEscapeKeyPressed())
 	{
 		handleEscapeKey();
@@ -751,7 +758,8 @@ void FloatingDockContainerPrivate::pollEscapeKey()
 //============================================================================
 bool FloatingDockContainerPrivate::isEscapeKeyPressed()
 {
-	static constexpr CGKeyCode EscapeKeyCode = 53;
+	// CGEventSourceKeyState samples the global Escape key state. Poll only while
+	// this window is actively dragging, and only for the single hard-coded key.
 	return CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, EscapeKeyCode);
 }
 #endif
