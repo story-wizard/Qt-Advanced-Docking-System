@@ -190,6 +190,14 @@ protected:
 	virtual void showEvent(QShowEvent *event) override;
 
 	/**
+	 * Wayland: re-applies the inherited style sheet to all floating widgets
+	 * when this dock manager or one of its ancestors changes its style sheet.
+	 * Floating widgets have no parent widget on Wayland, so they do not
+	 * receive style sheet changes that propagate down the widget hierarchy.
+	 */
+	virtual void changeEvent(QEvent *event) override;
+
+	/**
 	 * Access for the internal dock focus controller.
 	 * This function only returns a valid object, if the FocusHighlighting
 	 * flag is set.
@@ -208,6 +216,13 @@ public:
 	{
 		MenuSortedByInsertion,
 		MenuAlphabeticallySorted
+	};
+
+	enum class ColorSchemeMode
+	{
+		Light,
+		Dark,
+		FollowPalette
 	};
 
 	/**
@@ -516,6 +531,16 @@ public:
 	static CIconProvider& iconProvider();
 
 	/**
+	 * Returns if current application palette is dark
+	 */
+	static bool isApplicationPaletteDark();
+
+	/**
+	 * Returns if currently applied stylesheet is supposed to be dark
+	 */
+	bool isDesiredStylesheetDark();
+
+	/**
 	 * Adds dockwidget into the given area.
 	 * If DockAreaWidget is not null, then the area parameter indicates the area
 	 * into the DockAreaWidget. If DockAreaWidget is null, the Dockwidget will
@@ -734,6 +759,17 @@ public:
 	 * into the view menu.
 	 */
 	void setViewMenuInsertionOrder(eViewMenuInsertionOrder Order);
+
+	/**
+	 * Define the behavior of stylesheet color scheme selection.
+	 * The stylesheet can be fixed to either light or dark scheme,
+	 * or it can follow the current application palette (default).
+	 * Note: The fixed settings implement legacy behavior (before
+	 * dark scheme was implemented) including problems like missing
+	 * palette change propagation. They are implemented solely
+	 * for compatibility reasons and manual stylesheet switching.
+	 */
+	void setColorSchemeMode(ColorSchemeMode Mode);
 
 	/**
 	 * This function returns true between the restoringState() and

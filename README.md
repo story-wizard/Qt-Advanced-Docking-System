@@ -22,6 +22,42 @@ integrated development environments (IDEs) such as Visual Studio.
 
 ## New and Noteworthy
 
+### Release 5.0
+
+#### Full Dark Mode Support
+
+Thanks to the [contribution](https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System/pull/842) from [Vojtěch Miškovský](https://github.com/miskovoj), Qt ADS now provides full dark mode support with automatic theme switching. This includes:
+
+- New stylesheets and icons
+- Automatic detection of the current theme (light/dark)
+- Automatic palette update propagation to user widgets
+
+![Dark Mode](doc/DarkMode.png)
+
+[read more...](doc/user-guide.md#default-style-sheet)
+
+#### Native Wayland Support
+
+Thanks to the outstanding contributions of [Matt Liberty](https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System/pull/844),
+the creator of [Joulescope](#joulescope), and [Davide Faconti](https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System/pull/837), the creator of [PlotJuggler](#plot-juggler),  Qt ADS now provides native
+Wayland support, making Linux desktop environments such as GNOME and KDE first-class platforms for the Advanced Docking System.
+
+![Wayland Support](doc/Wayland_Logo.svg)
+
+Previous versions relied on mechanisms that are not supported by the Wayland protocol, resulting in
+incorrect drag previews and broken docking behavior. The new implementation adopts Wayland-native
+APIs while preserving the familiar Qt ADS user experience.
+
+Highlights include:
+
+- Full support for docking, undocking, and re-docking floating windows on Wayland
+- Accurate drag previews and correctly positioned docking overlays
+- Hybrid drag behavior: smooth in-window docking with seamless transition to native compositor-managed window dragging
+- Platform-specific implementation that affects only Wayland—Windows, macOS, and X11 continue to use the existing, proven code path
+- Improved compatibility with modern Linux desktop environments while maintaining the same intuitive docking workflow across all platforms
+
+With these changes, Qt ADS now offers a reliable and polished docking experience on native Wayland without sacrificing compatibility or behavior on other operating systems.
+
 ### Release 4.5
 
 #### Tabs at Bottom
@@ -153,6 +189,9 @@ know it from Visual Studio.
 ### Overview
 
 - [New and Noteworthy](#new-and-noteworthy)
+  - [Release 5.0](#release-50)
+    - [Full Dark Mode Support](#full-dark-mode-support)
+    - [Native Wayland Support](#native-wayland-support)
   - [Release 4.5](#release-45)
     - [Tabs at Bottom](#tabs-at-bottom)
   - [Release 4.1](#release-41)
@@ -183,6 +222,7 @@ know it from Visual Studio.
   - [Windows](#windows)
   - [macOS](#macos)
   - [Linux](#linux)
+    - [Wayland](#wayland)
 - [Build](#build)
   - [Qt5 on Ubuntu 18.04 or 20.04](#qt5-on-ubuntu-1804-or-2004)
   - [Qt5 on Ubuntu 22.04](#qt5-on-ubuntu-2204)
@@ -408,18 +448,39 @@ the library switches to `QWidget` based title bars.
 
 - **Kubuntu 18.04 and 19.10** - uses KWin - no native title bars
 - **Ubuntu 18.04, 19.10 and 20.04** - native title bars are supported
-- **Ubuntu 22.04** - uses Wayland -> no native title bars
+- **Ubuntu 22.04 and later** - uses Wayland -> native title bars (see [Wayland](#wayland) below)
 
 There are some requirements for the Linux distribution that have to be met:
 
 - an X server that supports ARGB visuals and a compositing window manager. This is required to display the translucent dock overlays ([https://doc.qt.io/qt-5/qwidget.html#creating-translucent-windows](https://doc.qt.io/qt-5/qwidget.html#creating-translucent-windows)). If your Linux distribution does not support this, or if you disable this feature, you will very likely see issue [#95](https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System/issues/95).
-- Wayland is not properly supported by Qt yet. If you use Wayland, then you should set the session type to x11: `XDG_SESSION_TYPE=x11 ./AdvancedDockingSystemDemo`. You will find more details about this in issue [#288](https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System/issues/288).
+- On Wayland the dock overlays are rendered as child widgets and this requirement does not apply.
 
 Screenshot Kubuntu:
 ![Advanced Docking on Kubuntu Linux](doc/linux_kubuntu_1804.png)
 
 Screenshot Ubuntu:
 ![Advanced Docking on Ubuntu Linux](doc/linux_ubuntu_1910.png)
+
+#### Wayland
+
+Since Qt 6.6.3 docking is supported on Wayland. Earlier Qt versions do not implement the `xdg_toplevel_drag_v1` protocol that is required to drag a floating window with the cursor, so on those versions you should still set the session type to X11 (XWayland): `XDG_SESSION_TYPE=x11 ./AdvancedDockingSystemDemo`. You will find more details in issues [#288](https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System/issues/288) and [#714](https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System/issues/714).
+
+Wayland does not allow a client to move its own top level windows in screen coordinates or to query the global cursor position, so docking is implemented differently than on the other platforms. This results in a few behavioral differences on Wayland:
+
+- Floating dock containers always use native window decorations (the custom
+  `QWidget` title bar is not available), because the custom title bar cannot
+  move the window.
+- Undocking and re-docking use a compositor driven drag (the floating window
+  itself follows the cursor) instead of the translucent drag preview.
+- The compositor controls the window stacking, so floating windows are not
+  forced to stay on top of the main window.
+- Saved layouts restore the docked arrangement, the floating-window sizes and
+  their maximized/normal state, but **not** the on-screen position of floating
+  windows (the same applies to the application's own main window). Wayland does
+  not let a client position its top-level windows, so the compositor decides
+  where restored windows appear. Restoring positions requires compositor side
+  session management (the staging `xx-session-management-v1` protocol), which is
+  not yet available through Qt.
 
 ## Build
 
@@ -701,6 +762,7 @@ says about the switch to Qt Advanced Docking:
 
 ![ADTF](doc/showcase_adtf.png)
 
+
 ### [DREAM3D-NX](https://www.dream3d.io)
 
 DREAM3D-NX *(Digital Representation Environment for Analysis of Materials in 3D)* is a cross-platform and modular, software suite that allows users to prepare, reconstruct, quantify, instantiate, and mesh, multidimensional, multimodal microstructural data, as well as many other applications.
@@ -709,9 +771,10 @@ DREAM3D-NX *(Digital Representation Environment for Analysis of Materials in 3D)
 taking advantage of the Advanced Docking System to present a highly customizable user interface
 for DREAM3D-NX Version 7.
 
+[read more...](http://www.dream3d.io/)
+
 ![DREAM.3D NX](doc/showcase_dream3d_nx.png)
 
-[read more...](http://www.dream3d.io/)
 
 ### [LabPlot](https://labplot.kde.org/)
 
@@ -719,9 +782,10 @@ KDE LabPlot is the ultimate free, open source and cross-platform tool for scient
 
 The LabPlot project recently switched to the Qt Advanced Docking System for their user interface. This switch represents a significant improvement to the LabPlot software, allowing users to create and manage complex data visualization layouts with ease.
 
+[read more...](https://labplot.kde.org/)
+
 ![LabPlot](doc/showcase_labplot.png)
 
-[read more...](https://labplot.kde.org/)
 
 ### [Scrutiny Debugger](https://scrutinydebugger.com/)
 
@@ -744,14 +808,24 @@ ADS powers Scrutiny’s flexible interface, letting users organize views and dat
 
 [![Scrutiny Debugger UI](doc/showcase_scrutiny-dark.png)](https://www.youtube.com/watch?v=Dd3osxW-Clo)
 
-
 ### [PiSoWorks](https://pypi.org/project/pisoworks/)
 
-PiSoWorks is an application for controlling the piezo amplifiers, such as the [NV200/D](https://www.piezosystem.com/product/nv-200-d-compact-amplifier/), from [piezosystem jena](https://www.piezosystem.com/) GmbH.
+PiSoWorks is a Python application for controlling the piezo amplifiers, such as the [NV200/D](https://www.piezosystem.com/product/nv-200-d-compact-amplifier/), from [piezosystem jena](https://www.piezosystem.com/) GmbH. Built with **PySide6**, it also serves as an excellent real-world example of how to use the [Qt ADS Python bindings](#python-bindings) to create sophisticated, dockable user interfaces for Python applications.
 
-![LabPlot](doc/showcase_pysoworks.png)
+[read more...](https://piezosystemjena.github.io/PiSoWorks/multiple_devices.html)
 
-[read more...](https://piezosystemjena.github.io/PiSoWorks/)
+![PiSoWorks](doc/showcase_pysoworks.png)
+
+
+### [Joulescope](https://www.joulescope.com/)
+
+**Joulescope** is a professional desktop application for precision current, voltage, power, and energy analysis, widely used by embedded systems engineers to optimize the energy consumption of their hardware and firmware. Its highly customizable, dockable user interface has been powered by Qt Advanced Docking System (Qt ADS) for many years, making it an excellent real-world validation of the library.
+
+Matt Liberty, the creator of Joulescope, made a [major contribution](https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System/pull/844) to Qt ADS by implementing native Wayland support. His work brings a reliable and polished docking experience to modern Linux desktop environments while preserving the existing behavior on Windows, macOS, and X11.
+
+[read more...](https://www.joulescope.com/)
+
+![Joulescope](doc/showcase_joulescope.jpg)
 
 ## Alternative Docking System Implementations
 

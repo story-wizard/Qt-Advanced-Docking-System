@@ -32,6 +32,7 @@
 #include <QPainter>
 #include <QAbstractButton>
 #include <QStyle>
+#include <QGuiApplication>
 
 #include "DockSplitter.h"
 #include "DockManager.h"
@@ -372,6 +373,14 @@ bool isHorizontalSideBarLocation(SideBarLocation Location)
 bool isSideBarArea(DockWidgetArea Area)
 {
 	return toSideBarLocation(Area) != SideBarNone;
+}
+
+
+//============================================================================
+bool isWayland()
+{
+	return QGuiApplication::platformName().startsWith(
+		QLatin1String("wayland"), Qt::CaseInsensitive);
 }
 
 
