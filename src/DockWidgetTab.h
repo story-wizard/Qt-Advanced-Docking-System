@@ -208,7 +208,7 @@ Q_SIGNALS:
 	void clicked();
 	void closeRequested();
 	void closeOtherTabsRequested();
-	void dragged(int DraggedLeftX);
+	void dragged(int DraggedLeftX, int DragDirection, int DragOriginLeftX);
 	void moved(const QPoint& GlobalPos);
 	void elidedChanged(bool elided);
 }; // class DockWidgetTab

@@ -62,7 +62,8 @@ private Q_SLOTS:
 	void onTabClicked();
 	void onTabCloseRequested();
 	void onCloseOtherTabsRequested();
-	void onTabWidgetDragged(int DraggedLeftX);
+	void onTabWidgetDragged(int DraggedLeftX, int DragDirection,
+		int DragOriginLeftX);
 	void onTabWidgetMoved(const QPoint& GlobalPos);
 
 protected:

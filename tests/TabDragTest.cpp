@@ -48,14 +48,15 @@ class TabDragTest : public QObject
 	Q_OBJECT
 
 private slots:
-	void horizontalDrag_reordersAtOneThirdOverlapAndStaysOnTabRail();
+	void horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail();
 };
 
-void TabDragTest::horizontalDrag_reordersAtOneThirdOverlapAndStaysOnTabRail()
+void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
 {
 	CDockManager Manager;
 	Manager.resize(720, 450);
-	auto First = makeDockWidget(Manager, QStringLiteral("First"));
+	auto First = makeDockWidget(Manager,
+		QStringLiteral("Very Wide Dragged Panel Tab"));
 	auto Second = makeDockWidget(Manager, QStringLiteral("Second"));
 	auto Third = makeDockWidget(Manager, QStringLiteral("Third"));
 	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, First);
@@ -79,22 +80,30 @@ void TabDragTest::horizontalDrag_reordersAtOneThirdOverlapAndStaysOnTabRail()
 	QApplication::processEvents();
 
 	const int DragStartLeft = FirstTab->pos().x();
-	const int RequiredOverlap = qMax(1, (SecondTab->width() + 2) / 3);
-	const int ReorderLeft = SecondTab->geometry().left() + RequiredOverlap
+	const int SecondRequiredOverlap = qMax(1,
+		(SecondTab->width() + 2) / 3);
+	const int SecondBoundary = SecondTab->geometry().left()
+		+ SecondRequiredOverlap
+		- FirstTab->width();
+	const int ThirdRequiredOverlap = qMax(1,
+		(ThirdTab->width() + 2) / 3);
+	const int ThirdBoundary = ThirdTab->geometry().left()
+		+ ThirdRequiredOverlap
 		- FirstTab->width();
 	auto dragPositionForLeft = [&](int Left)
 	{
 		return QPoint(PressPos.x() + Left - DragStartLeft, PressPos.y());
 	};
-	const QPoint BeforeRequiredOverlap = dragPositionForLeft(ReorderLeft - 1);
-	const QPoint AtRequiredOverlap = dragPositionForLeft(ReorderLeft);
-	const QPoint BeyondRight(
-		TabBar->mapToGlobal(QPoint(
-			TabBar->width() + CDockManager::startDragDistance(), 0)).x(),
-		PressPos.y());
-	const QPoint BeyondLeft(
-		TabBar->mapToGlobal(QPoint(-CDockManager::startDragDistance(), 0)).x(),
-		PressPos.y());
+	const QPoint BeforeRequiredOverlap = dragPositionForLeft(
+		SecondBoundary - 1);
+	const QPoint AtRequiredOverlap = dragPositionForLeft(SecondBoundary);
+	const QPoint JustPastRequiredOverlap = dragPositionForLeft(
+		SecondBoundary + 1);
+	const QPoint AtThirdOverlap = dragPositionForLeft(ThirdBoundary);
+	const QPoint BackAcrossThird = dragPositionForLeft(ThirdBoundary - 5);
+	const QPoint StillBetweenBoundaries = dragPositionForLeft(
+		ThirdBoundary - 6);
+	const QPoint BackAcrossSecond = dragPositionForLeft(SecondBoundary - 5);
 	sendMouseEvent(FirstTab, QEvent::MouseMove, BeforeRequiredOverlap,
 		Qt::NoButton, Qt::LeftButton);
 
@@ -105,24 +114,53 @@ void TabDragTest::horizontalDrag_reordersAtOneThirdOverlapAndStaysOnTabRail()
 	sendMouseEvent(FirstTab, QEvent::MouseMove, AtRequiredOverlap,
 		Qt::NoButton, Qt::LeftButton);
 	QCOMPARE(TabMovedSpy.count(), 1);
+	QCOMPARE(TabMovedSpy.at(0).at(0).toInt(), 0);
+	QCOMPARE(TabMovedSpy.at(0).at(1).toInt(), 1);
 	QCOMPARE(DockArea->dockWidget(1), First);
 
-	sendMouseEvent(FirstTab, QEvent::MouseMove, BeyondRight,
+	// Small movements around the swap boundary must not immediately undo it.
+	sendMouseEvent(FirstTab, QEvent::MouseMove, JustPastRequiredOverlap,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(TabMovedSpy.count(), 1);
+	sendMouseEvent(FirstTab, QEvent::MouseMove, AtRequiredOverlap,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(TabMovedSpy.count(), 1);
+	QCOMPARE(DockArea->dockWidget(1), First);
+
+	sendMouseEvent(FirstTab, QEvent::MouseMove, AtThirdOverlap,
 		Qt::NoButton, Qt::LeftButton);
 	QCOMPARE(TabMovedSpy.count(), 2);
+	QCOMPARE(TabMovedSpy.at(1).at(0).toInt(), 1);
+	QCOMPARE(TabMovedSpy.at(1).at(1).toInt(), 2);
 	QCOMPARE(DockArea->dockWidget(2), First);
 	QCOMPARE(FirstTab->dragState(), DraggingTab);
 
-	sendMouseEvent(FirstTab, QEvent::MouseMove, BeyondLeft,
+	sendMouseEvent(FirstTab, QEvent::MouseMove, BackAcrossThird,
 		Qt::NoButton, Qt::LeftButton);
 	QCOMPARE(TabMovedSpy.count(), 3);
+	QCOMPARE(TabMovedSpy.at(2).at(0).toInt(), 2);
+	QCOMPARE(TabMovedSpy.at(2).at(1).toInt(), 1);
+	QCOMPARE(DockArea->dockWidget(1), First);
+	QCOMPARE(FirstTab->dragState(), DraggingTab);
+
+	// The next neighbor has its own boundary; another pixel cannot move it too.
+	sendMouseEvent(FirstTab, QEvent::MouseMove, StillBetweenBoundaries,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(TabMovedSpy.count(), 3);
+	QCOMPARE(DockArea->dockWidget(1), First);
+
+	sendMouseEvent(FirstTab, QEvent::MouseMove, BackAcrossSecond,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(TabMovedSpy.count(), 4);
+	QCOMPARE(TabMovedSpy.at(3).at(0).toInt(), 1);
+	QCOMPARE(TabMovedSpy.at(3).at(1).toInt(), 0);
 	QCOMPARE(DockArea->dockWidget(0), First);
 	QCOMPARE(FirstTab->dragState(), DraggingTab);
 
 	// Releasing between slots must seat the tab back in its layout position.
 	sendMouseEvent(FirstTab, QEvent::MouseMove, BeforeRequiredOverlap,
 		Qt::NoButton, Qt::LeftButton);
-	QCOMPARE(TabMovedSpy.count(), 3);
+	QCOMPARE(TabMovedSpy.count(), 4);
 	sendMouseEvent(FirstTab, QEvent::MouseButtonRelease, BeforeRequiredOverlap,
 		Qt::LeftButton, Qt::NoButton);
 	QCOMPARE(FirstTab->dragState(), DraggingInactive);

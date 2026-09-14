@@ -68,6 +68,7 @@ struct DockWidgetTabPrivate
 	tTabLabel* TitleLabel;
 	QPoint GlobalDragStartMousePosition;
 	QPoint DragStartMousePosition;
+	int LastDragMouseX = 0;
 	bool IsActiveTab = false;
 	CDockAreaWidget* DockArea = nullptr;
 	eDragState DragState = DraggingInactive;
@@ -192,6 +193,7 @@ struct DockWidgetTabPrivate
 	{
 		GlobalDragStartMousePosition = GlobalPos;
 		DragStartMousePosition = _this->mapFromGlobal(GlobalPos);
+		LastDragMouseX = GlobalPos.x();
 	}
 
 	/**
@@ -295,7 +297,11 @@ void DockWidgetTabPrivate::createLayout()
 void DockWidgetTabPrivate::moveTab(QMouseEvent* ev)
 {
     ev->accept();
-    QPoint Distance = internal::globalPositionOf(ev) - GlobalDragStartMousePosition;
+	const QPoint GlobalPos = internal::globalPositionOf(ev);
+	const int DragDirection = (GlobalPos.x() > LastDragMouseX) ? 1
+		: ((GlobalPos.x() < LastDragMouseX) ? -1 : 0);
+	LastDragMouseX = GlobalPos.x();
+    QPoint Distance = GlobalPos - GlobalDragStartMousePosition;
     Distance.setY(0);
     auto TargetPos = Distance + TabDragStartPosition;
 	const int DraggedLeftX = TargetPos.x();
@@ -303,7 +309,8 @@ void DockWidgetTabPrivate::moveTab(QMouseEvent* ev)
     TargetPos.rx() = qMin(_this->parentWidget()->rect().right() - _this->width() + 1, TargetPos.rx());
     _this->move(TargetPos);
     _this->raise();
-	Q_EMIT _this->dragged(DraggedLeftX);
+	Q_EMIT _this->dragged(DraggedLeftX, DragDirection,
+		TabDragStartPosition.x());
 }
 
 

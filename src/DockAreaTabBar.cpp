@@ -31,12 +31,14 @@
 #include "DockAreaTabBar.h"
 
 #include <QMouseEvent>
+#include <QPointer>
 #include <QScrollBar>
 #include <QDebug>
 #include <QBoxLayout>
 #include <QApplication>
 #include <QtGlobal>
 #include <QTimer>
+#include <QVector>
 
 #include "FloatingDockContainer.h"
 #include "DockAreaWidget.h"
@@ -50,6 +52,11 @@
 
 namespace ads
 {
+namespace
+{
+constexpr int ReorderReverseHysteresis = 4;
+}
+
 /**
  * Private data class of CDockAreaTabBar class (pimpl)
  */
@@ -60,6 +67,10 @@ struct DockAreaTabBarPrivate
 	QWidget* TabsContainerWidget;
 	QBoxLayout* TabsLayout;
 	int CurrentIndex = -1;
+	QPointer<CDockWidgetTab> DraggedTab;
+	QVector<int> DragReorderBoundaries;
+	int CurrentDragRank = -1;
+	int LastReorderDirection = 0;
 
 	/**
 	 * Private data constructor
@@ -85,7 +96,8 @@ struct DockAreaTabBarPrivate
 	/**
 	 * Moves a sibling once the dragged tab covers one third of its width.
 	 */
-	bool reorderDraggedTab(CDockWidgetTab* MovingTab, int DraggedLeftX);
+	bool reorderDraggedTab(CDockWidgetTab* MovingTab, int DraggedLeftX,
+		int DragDirection, int DragOriginLeftX);
 };
 // struct DockAreaTabBarPrivate
 
@@ -131,11 +143,54 @@ void DockAreaTabBarPrivate::updateTabs()
 
 //============================================================================
 bool DockAreaTabBarPrivate::reorderDraggedTab(CDockWidgetTab* MovingTab,
-	int DraggedLeftX)
+	int DraggedLeftX, int DragDirection, int DragOriginLeftX)
 {
-	if (!MovingTab)
+	if (!MovingTab || DragDirection == 0)
 	{
 		return false;
+	}
+	if (DraggedTab != MovingTab)
+	{
+		DraggedTab = MovingTab;
+		DragReorderBoundaries.clear();
+		CurrentDragRank = -1;
+		LastReorderDirection = 0;
+
+		QVector<QRect> OriginalTabGeometries;
+		for (int i = 0; i < _this->count(); ++i)
+		{
+			auto Tab = _this->tab(i);
+			if (!Tab->isVisibleTo(_this))
+			{
+				continue;
+			}
+
+			QRect Geometry = Tab->geometry();
+			if (Tab == MovingTab)
+			{
+				CurrentDragRank = OriginalTabGeometries.size();
+				Geometry.moveLeft(DragOriginLeftX);
+			}
+			OriginalTabGeometries.push_back(Geometry);
+		}
+
+		if (CurrentDragRank < 0)
+		{
+			return false;
+		}
+		for (int i = 0; i + 1 < OriginalTabGeometries.size(); ++i)
+		{
+			const QRect SiblingGeometry = (i < CurrentDragRank)
+				? OriginalTabGeometries.at(i)
+				: OriginalTabGeometries.at(i + 1);
+			const int RequiredOverlap = qMax(1,
+				(SiblingGeometry.width() + 2) / 3);
+			const int Boundary = (i < CurrentDragRank)
+				? SiblingGeometry.right() - RequiredOverlap + 1
+				: SiblingGeometry.left() + RequiredOverlap
+					- MovingTab->width();
+			DragReorderBoundaries.push_back(Boundary);
+		}
 	}
 
 	const int FromIndex = TabsLayout->indexOf(MovingTab);
@@ -144,34 +199,57 @@ bool DockAreaTabBarPrivate::reorderDraggedTab(CDockWidgetTab* MovingTab,
 		return false;
 	}
 
-	const int DraggedRightX = DraggedLeftX + MovingTab->width() - 1;
-	int ToIndex = FromIndex;
-	for (int i = FromIndex - 1; i >= 0; --i)
+	int ToIndex = -1;
+	if (DragDirection < 0)
 	{
-		auto SiblingTab = _this->tab(i);
-		const int RequiredOverlap = qMax(1, (SiblingTab->width() + 2) / 3);
-		const int ReorderThreshold = SiblingTab->geometry().right()
-			- RequiredOverlap + 1;
-		if (SiblingTab->isVisibleTo(_this)
-		 && DraggedLeftX <= ReorderThreshold)
+		if (CurrentDragRank <= 0)
 		{
+			return false;
+		}
+		const int Hysteresis = LastReorderDirection > 0
+			? ReorderReverseHysteresis : 0;
+		if (DraggedLeftX > DragReorderBoundaries.at(CurrentDragRank - 1)
+			- Hysteresis)
+		{
+			return false;
+		}
+		for (int i = FromIndex - 1; i >= 0; --i)
+		{
+			auto SiblingTab = _this->tab(i);
+			if (!SiblingTab->isVisibleTo(_this))
+			{
+				continue;
+			}
 			ToIndex = i;
+			break;
 		}
 	}
-	for (int i = FromIndex + 1; i < _this->count(); ++i)
+	else
 	{
-		auto SiblingTab = _this->tab(i);
-		const int RequiredOverlap = qMax(1, (SiblingTab->width() + 2) / 3);
-		const int ReorderThreshold = SiblingTab->geometry().left()
-			+ RequiredOverlap - 1;
-		if (SiblingTab->isVisibleTo(_this)
-		 && DraggedRightX >= ReorderThreshold)
+		if (CurrentDragRank >= DragReorderBoundaries.size())
 		{
+			return false;
+		}
+		const int Hysteresis = LastReorderDirection < 0
+			? ReorderReverseHysteresis : 0;
+		if (DraggedLeftX < DragReorderBoundaries.at(CurrentDragRank)
+			+ Hysteresis)
+		{
+			return false;
+		}
+		for (int i = FromIndex + 1; i < _this->count(); ++i)
+		{
+			auto SiblingTab = _this->tab(i);
+			if (!SiblingTab->isVisibleTo(_this))
+			{
+				continue;
+			}
 			ToIndex = i;
+			break;
 		}
 	}
 
-	if (ToIndex == FromIndex)
+	if (ToIndex < 0)
 	{
 		return false;
 	}
@@ -185,6 +263,8 @@ bool DockAreaTabBarPrivate::reorderDraggedTab(CDockWidgetTab* MovingTab,
 	ADS_PRINT("tabMoved from " << FromIndex << " to " << ToIndex);
 	Q_EMIT _this->tabMoved(FromIndex, ToIndex);
 	_this->setCurrentIndex(ToIndex);
+	CurrentDragRank += DragDirection;
+	LastReorderDirection = DragDirection;
 	return true;
 }
 
@@ -265,7 +345,8 @@ void CDockAreaTabBar::insertTab(int Index, CDockWidgetTab* Tab)
 	connect(Tab, SIGNAL(clicked()), this, SLOT(onTabClicked()));
 	connect(Tab, SIGNAL(closeRequested()), this, SLOT(onTabCloseRequested()));
 	connect(Tab, SIGNAL(closeOtherTabsRequested()), this, SLOT(onCloseOtherTabsRequested()));
-	connect(Tab, SIGNAL(dragged(int)), this, SLOT(onTabWidgetDragged(int)));
+	connect(Tab, SIGNAL(dragged(int,int,int)), this,
+		SLOT(onTabWidgetDragged(int,int,int)));
 	connect(Tab, SIGNAL(moved(QPoint)), this, SLOT(onTabWidgetMoved(QPoint)));
 	connect(Tab, SIGNAL(elidedChanged(bool)), this, SIGNAL(elidedChanged(bool)));
 	Tab->installEventFilter(this);
@@ -422,10 +503,12 @@ CDockWidgetTab* CDockAreaTabBar::tab(int Index) const
 
 
 //===========================================================================
-void CDockAreaTabBar::onTabWidgetDragged(int DraggedLeftX)
+void CDockAreaTabBar::onTabWidgetDragged(int DraggedLeftX, int DragDirection,
+	int DragOriginLeftX)
 {
 	CDockWidgetTab* MovingTab = qobject_cast<CDockWidgetTab*>(sender());
-	d->reorderDraggedTab(MovingTab, DraggedLeftX);
+	d->reorderDraggedTab(MovingTab, DraggedLeftX, DragDirection,
+		DragOriginLeftX);
 }
 
 
@@ -433,6 +516,10 @@ void CDockAreaTabBar::onTabWidgetDragged(int DraggedLeftX)
 void CDockAreaTabBar::onTabWidgetMoved(const QPoint& GlobalPos)
 {
 	Q_UNUSED(GlobalPos)
+	d->DraggedTab.clear();
+	d->DragReorderBoundaries.clear();
+	d->CurrentDragRank = -1;
+	d->LastReorderDirection = 0;
 	// Ensure that the released tab is seated in its layout slot.
 	d->TabsLayout->invalidate();
 	d->TabsLayout->activate();
