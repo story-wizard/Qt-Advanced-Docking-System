@@ -81,6 +81,11 @@ struct DockAreaTabBarPrivate
 	 * Convenience function to access last tab
 	 */
 	CDockWidgetTab* lastTab() const {return _this->tab(_this->count() - 1);}
+
+	/**
+	 * Moves a sibling once the dragged tab covers one third of its width.
+	 */
+	bool reorderDraggedTab(CDockWidgetTab* MovingTab, int DraggedLeftX);
 };
 // struct DockAreaTabBarPrivate
 
@@ -121,6 +126,66 @@ void DockAreaTabBarPrivate::updateTabs()
 			TabWidget->setActiveTab(false);
 		}
 	}
+}
+
+
+//============================================================================
+bool DockAreaTabBarPrivate::reorderDraggedTab(CDockWidgetTab* MovingTab,
+	int DraggedLeftX)
+{
+	if (!MovingTab)
+	{
+		return false;
+	}
+
+	const int FromIndex = TabsLayout->indexOf(MovingTab);
+	if (FromIndex < 0)
+	{
+		return false;
+	}
+
+	const int DraggedRightX = DraggedLeftX + MovingTab->width() - 1;
+	int ToIndex = FromIndex;
+	for (int i = FromIndex - 1; i >= 0; --i)
+	{
+		auto SiblingTab = _this->tab(i);
+		const int RequiredOverlap = qMax(1, (SiblingTab->width() + 2) / 3);
+		const int ReorderThreshold = SiblingTab->geometry().right()
+			- RequiredOverlap + 1;
+		if (SiblingTab->isVisibleTo(_this)
+		 && DraggedLeftX <= ReorderThreshold)
+		{
+			ToIndex = i;
+		}
+	}
+	for (int i = FromIndex + 1; i < _this->count(); ++i)
+	{
+		auto SiblingTab = _this->tab(i);
+		const int RequiredOverlap = qMax(1, (SiblingTab->width() + 2) / 3);
+		const int ReorderThreshold = SiblingTab->geometry().left()
+			+ RequiredOverlap - 1;
+		if (SiblingTab->isVisibleTo(_this)
+		 && DraggedRightX >= ReorderThreshold)
+		{
+			ToIndex = i;
+		}
+	}
+
+	if (ToIndex == FromIndex)
+	{
+		return false;
+	}
+
+	const QPoint DraggedPosition = MovingTab->pos();
+	TabsLayout->removeWidget(MovingTab);
+	TabsLayout->insertWidget(ToIndex, MovingTab);
+	TabsLayout->activate();
+	MovingTab->move(DraggedPosition);
+	MovingTab->raise();
+	ADS_PRINT("tabMoved from " << FromIndex << " to " << ToIndex);
+	Q_EMIT _this->tabMoved(FromIndex, ToIndex);
+	_this->setCurrentIndex(ToIndex);
+	return true;
 }
 
 
@@ -200,6 +265,7 @@ void CDockAreaTabBar::insertTab(int Index, CDockWidgetTab* Tab)
 	connect(Tab, SIGNAL(clicked()), this, SLOT(onTabClicked()));
 	connect(Tab, SIGNAL(closeRequested()), this, SLOT(onTabCloseRequested()));
 	connect(Tab, SIGNAL(closeOtherTabsRequested()), this, SLOT(onCloseOtherTabsRequested()));
+	connect(Tab, SIGNAL(dragged(int)), this, SLOT(onTabWidgetDragged(int)));
 	connect(Tab, SIGNAL(moved(QPoint)), this, SLOT(onTabWidgetMoved(QPoint)));
 	connect(Tab, SIGNAL(elidedChanged(bool)), this, SIGNAL(elidedChanged(bool)));
 	Tab->installEventFilter(this);
@@ -356,53 +422,20 @@ CDockWidgetTab* CDockAreaTabBar::tab(int Index) const
 
 
 //===========================================================================
-void CDockAreaTabBar::onTabWidgetMoved(const QPoint& GlobalPos)
+void CDockAreaTabBar::onTabWidgetDragged(int DraggedLeftX)
 {
 	CDockWidgetTab* MovingTab = qobject_cast<CDockWidgetTab*>(sender());
-	if (!MovingTab)
-	{
-		return;
-	}
+	d->reorderDraggedTab(MovingTab, DraggedLeftX);
+}
 
-	int fromIndex = d->TabsLayout->indexOf(MovingTab);
-	auto MousePos = mapFromGlobal(GlobalPos);
-	MousePos.rx() = qMax(0, MousePos.x());
-	MousePos.rx() = qMin(width(), MousePos.x());
-	int toIndex = -1;
-	// Find tab under mouse
-	for (int i = 0; i < count(); ++i)
-	{
-		CDockWidgetTab* DropTab = tab(i);
-		auto TabGeometry = DropTab->geometry();
-		TabGeometry.setTopLeft(d->TabsContainerWidget->mapToParent(TabGeometry.topLeft()));
-		TabGeometry.setBottomRight(d->TabsContainerWidget->mapToParent(TabGeometry.bottomRight()));
-		if (DropTab == MovingTab || !DropTab->isVisibleTo(this)
-		    || !TabGeometry.contains(MousePos))
-		{
-			continue;
-		}
 
-		toIndex = d->TabsLayout->indexOf(DropTab);
-		if (toIndex == fromIndex)
-		{
-			toIndex = -1;
-		}
-		break;
-	}
-
-	if (toIndex > -1)
-	{
-		d->TabsLayout->removeWidget(MovingTab);
-		d->TabsLayout->insertWidget(toIndex, MovingTab);
-        ADS_PRINT("tabMoved from " << fromIndex << " to " << toIndex);
-		Q_EMIT tabMoved(fromIndex, toIndex);
-		setCurrentIndex(toIndex);
-	}
-	else
-	{
-		// Ensure that the moved tab is reset to its start position
-		d->TabsLayout->update();
-	}
+//===========================================================================
+void CDockAreaTabBar::onTabWidgetMoved(const QPoint& GlobalPos)
+{
+	Q_UNUSED(GlobalPos)
+	// Ensure that the released tab is seated in its layout slot.
+	d->TabsLayout->invalidate();
+	d->TabsLayout->activate();
 }
 
 //===========================================================================

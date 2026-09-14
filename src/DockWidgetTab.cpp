@@ -298,10 +298,12 @@ void DockWidgetTabPrivate::moveTab(QMouseEvent* ev)
     QPoint Distance = internal::globalPositionOf(ev) - GlobalDragStartMousePosition;
     Distance.setY(0);
     auto TargetPos = Distance + TabDragStartPosition;
+	const int DraggedLeftX = TargetPos.x();
     TargetPos.rx() = qMax(TargetPos.x(), 0);
     TargetPos.rx() = qMin(_this->parentWidget()->rect().right() - _this->width() + 1, TargetPos.rx());
     _this->move(TargetPos);
     _this->raise();
+	Q_EMIT _this->dragged(DraggedLeftX);
 }
 
 
@@ -551,11 +553,11 @@ void CDockWidgetTab::mouseMoveEvent(QMouseEvent* ev)
     	d->moveTab(ev);
     }
 
-    auto MappedPos = mapToParent(ev->pos());
-    bool MouseOutsideBar = (MappedPos.x() < 0) || (MappedPos.x() > parentWidget()->rect().right());
-    // Maybe a fixed drag distance is better here ?
+	// Keep a tab attached to its row during horizontal movement.
+	// Pulling it vertically beyond the undock threshold is the one deliberate
+	// transition from tab reordering to a floating panel drag.
     int DragDistanceY = qAbs(d->GlobalDragStartMousePosition.y() - internal::globalPositionOf(ev).y());
-    if (DragDistanceY >= CDockManager::startDragDistance() || MouseOutsideBar)
+	if (DragDistanceY >= CDockManager::startDragDistance())
 	{
 		// If this is the last dock area in a dock container with only
     	// one single dock widget it does not make  sense to move it to a new
@@ -587,6 +589,10 @@ void CDockWidgetTab::mouseMoveEvent(QMouseEvent* ev)
         }
     	return;
 	}
+	else if (d->isDraggingState(DraggingTab))
+	{
+		return;
+	}
     else if (d->DockArea->openDockWidgetsCount() > 1
      && (internal::globalPositionOf(ev) - d->GlobalDragStartMousePosition).manhattanLength() >= QApplication::startDragDistance()) // Wait a few pixels before start moving
 	{
@@ -595,8 +601,9 @@ void CDockWidgetTab::mouseMoveEvent(QMouseEvent* ev)
     	if (DraggingTab != d->DragState)
     	{
     		d->TabDragStartPosition = this->pos();
-    	}
+        }
         d->DragState = DraggingTab;
+		d->moveTab(ev);
 		return;
 	}
 

@@ -40,6 +40,7 @@
 #include "ads_globals.h"
 
 QT_FORWARD_DECLARE_CLASS(QGridLayout)
+QT_FORWARD_DECLARE_CLASS(QPixmap)
 
 namespace ads
 {
@@ -145,6 +146,13 @@ public:
 	 * Hides the overlay
 	 */
 	void hideOverlay();
+
+	/**
+	 * [Wizard NLE fork] Shows the dragged panel header above this overlay's
+	 * translucent drop preview without creating another native drag window.
+	 */
+	bool setDragPreviewHeader(const QPixmap& Pixmap,
+		const QPoint& GlobalTopLeft);
 
 	/**
 	 * Enables / disables the semi transparent overlay rectangle that represents

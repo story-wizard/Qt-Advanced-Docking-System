@@ -62,6 +62,7 @@ private Q_SLOTS:
 	void onTabClicked();
 	void onTabCloseRequested();
 	void onCloseOtherTabsRequested();
+	void onTabWidgetDragged(int DraggedLeftX);
 	void onTabWidgetMoved(const QPoint& GlobalPos);
 
 protected:
@@ -230,4 +231,3 @@ Q_SIGNALS:
 } // namespace ads
 //-----------------------------------------------------------------------------
 #endif // DockAreaTabBarH
-

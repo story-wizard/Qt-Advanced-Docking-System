@@ -18,7 +18,9 @@
 #include <QKeyEvent>
 
 #include "DockWidget.h"
+#include "DockWidgetTab.h"
 #include "DockAreaWidget.h"
+#include "DockAreaTitleBar.h"
 #include "DockManager.h"
 #include "DockContainerWidget.h"
 #include "DockOverlay.h"
@@ -43,6 +45,8 @@ struct FloatingDragPreviewPrivate
 	qreal WindowOpacity;
 	bool Hidden = false;
 	QPixmap ContentPreviewPixmap;
+	QPixmap HeaderPreviewPixmap;
+	bool HeaderPreviewInOverlay = false;
 	bool Canceled = false;
 
 	// Wayland hybrid drag: during the in-window phase, hit-testing and overlays
@@ -67,6 +71,25 @@ struct FloatingDragPreviewPrivate
 	 */
 	FloatingDragPreviewPrivate(CFloatingDragPreview *_public);
 	void updateDropOverlays(const QPoint &GlobalPos);
+	void updateDragPreviewHeaders(const QPoint& GlobalTopLeft)
+	{
+		if (HeaderPreviewPixmap.isNull())
+		{
+			return;
+		}
+		const bool HeaderInContainer =
+			DockManager->containerOverlay()->setDragPreviewHeader(
+			HeaderPreviewPixmap, GlobalTopLeft);
+		const bool HeaderInDockArea =
+			DockManager->dockAreaOverlay()->setDragPreviewHeader(
+			HeaderPreviewPixmap, GlobalTopLeft);
+		const bool HeaderInOverlay = HeaderInContainer || HeaderInDockArea;
+		if (HeaderPreviewInOverlay != HeaderInOverlay)
+		{
+			HeaderPreviewInOverlay = HeaderInOverlay;
+			_this->update();
+		}
+	}
 
 	void setHidden(bool Value)
 	{
@@ -379,6 +402,24 @@ CFloatingDragPreview::CFloatingDragPreview(QWidget* Content, QWidget* parent) :
 	{
 		d->ContentPreviewPixmap = QPixmap(Content->size());
 		Content->render(&d->ContentPreviewPixmap);
+
+		// Keep the dragged panel's identity legible above the translucent body
+		// preview and destination overlays. A tab drag carries the source tab;
+		// an area drag carries the complete source title row so a tab group does
+		// not look like a single-panel payload.
+		QWidget* Header = nullptr;
+		if (auto DockWidget = qobject_cast<CDockWidget*>(Content))
+		{
+			Header = DockWidget->tabWidget();
+		}
+		else if (auto DockArea = qobject_cast<CDockAreaWidget*>(Content))
+		{
+			Header = DockArea->titleBar();
+		}
+		if (Header)
+		{
+			d->HeaderPreviewPixmap = Header->grab();
+		}
 	}
 
 	connect(qApp, SIGNAL(applicationStateChanged(Qt::ApplicationState)),
@@ -452,6 +493,7 @@ void CFloatingDragPreview::moveFloating(const QPoint& GlobalPos)
 		move(parentWidget()->mapFromGlobal(TargetGlobal));
 	}
 	d->updateDropOverlays(GlobalPos);
+	d->updateDragPreviewHeaders(TargetGlobal);
 }
 
 
@@ -476,7 +518,11 @@ void CFloatingDragPreview::cancelDraggingSilently()
 void CFloatingDragPreview::refreshDropOverlays()
 {
 	// updateDropOverlays() owns the visibility/manager/gate guards for previews.
-	d->updateDropOverlays(QCursor::pos());
+	const QPoint GlobalPos = QCursor::pos();
+	d->updateDropOverlays(GlobalPos);
+	const int BorderSize = (frameSize().width() - size().width()) / 2;
+	d->updateDragPreviewHeaders(GlobalPos - d->DragStartMousePosition
+		- QPoint(BorderSize, 0));
 }
 
 
@@ -588,10 +634,12 @@ void CFloatingDragPreview::paintEvent(QPaintEvent* event)
 	}
 
 	QPainter painter(this);
-	painter.setOpacity(0.6);
 	if (CDockManager::testConfigFlag(CDockManager::DragPreviewShowsContentPixmap))
 	{
+		painter.save();
+		painter.setOpacity(0.28);
 		painter.drawPixmap(QPoint(0, 0), d->ContentPreviewPixmap);
+		painter.restore();
 	}
 
 	// If we do not have a window frame then we paint a QRubberBand like
@@ -609,6 +657,33 @@ void CFloatingDragPreview::paintEvent(QPaintEvent* event)
 		Color.setAlpha(64);
 		painter.setBrush(Color);
 		painter.drawRect(rect().adjusted(0, 0, -1, -1));
+	}
+
+	if (!d->HeaderPreviewInOverlay && !d->HeaderPreviewPixmap.isNull())
+	{
+		const qreal PixelRatio = d->HeaderPreviewPixmap.devicePixelRatio();
+		const QSize HeaderSize(
+			qRound(d->HeaderPreviewPixmap.width() / PixelRatio),
+			qRound(d->HeaderPreviewPixmap.height() / PixelRatio));
+		const QRect HeaderRect(QPoint(0, 0), HeaderSize);
+
+		painter.save();
+		QColor Shadow = palette().color(QPalette::Shadow);
+		Shadow.setAlpha(110);
+		painter.setPen(Qt::NoPen);
+		painter.setBrush(Shadow);
+		painter.drawRoundedRect(HeaderRect.translated(2, 2), 3, 3);
+
+		painter.setOpacity(0.96);
+		painter.drawPixmap(QPoint(0, 0), d->HeaderPreviewPixmap);
+		painter.setOpacity(1.0);
+		QPen HeaderOutline(palette().color(QPalette::Active, QPalette::Highlight));
+		HeaderOutline.setWidth(1);
+		HeaderOutline.setCosmetic(true);
+		painter.setPen(HeaderOutline);
+		painter.setBrush(Qt::NoBrush);
+		painter.drawRoundedRect(HeaderRect.adjusted(0, 0, -1, -1), 3, 3);
+		painter.restore();
 	}
 }
 

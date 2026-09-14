@@ -76,6 +76,8 @@ struct DockOverlayPrivate
 	CDockOverlay* _this;
 	DockWidgetAreas AllowedAreas = InvalidDockWidgetArea;
 	CDockOverlayCross* Cross;
+	QLabel* DragPreviewHeader;
+	qint64 DragPreviewHeaderCacheKey = 0;
 	QPointer<QWidget> TargetWidget;
 	DockWidgetArea LastLocation = InvalidDockWidgetArea;
 	bool DropPreviewEnabled = true;
@@ -440,6 +442,9 @@ CDockOverlay::CDockOverlay(QWidget* parent, eMode Mode) :
 {
 	d->Mode = Mode;
 	d->Cross = new CDockOverlayCross(this);
+	d->DragPreviewHeader = new QLabel(this);
+	d->DragPreviewHeader->setAttribute(Qt::WA_TransparentForMouseEvents);
+	d->DragPreviewHeader->hide();
 	if (internal::isWayland())
 	{
 		// Remember the stable home window so hideOverlay() can reparent the
@@ -850,6 +855,7 @@ DockWidgetArea CDockOverlay::showOverlay(QWidget* target, const QPoint& GlobalPo
 //============================================================================
 void CDockOverlay::hideOverlay()
 {
+	d->DragPreviewHeader->hide();
 	hide();
 	// Wayland: showOverlay() reparents this overlay (and its cross) into the
 	// top level window it is shown over. Reparent them back to the stable home
@@ -865,6 +871,34 @@ void CDockOverlay::hideOverlay()
 	d->TargetWidget.clear();
 	d->LastLocation = InvalidDockWidgetArea;
 	d->DropAreaRect = QRect();
+}
+
+
+//============================================================================
+bool CDockOverlay::setDragPreviewHeader(const QPixmap& Pixmap,
+	const QPoint& GlobalTopLeft)
+{
+	if (Pixmap.isNull() || isHidden())
+	{
+		d->DragPreviewHeader->hide();
+		return false;
+	}
+
+	if (d->DragPreviewHeaderCacheKey != Pixmap.cacheKey())
+	{
+		d->DragPreviewHeaderCacheKey = Pixmap.cacheKey();
+		d->DragPreviewHeader->setPixmap(Pixmap);
+		const qreal PixelRatio = Pixmap.devicePixelRatio();
+		d->DragPreviewHeader->resize(qRound(Pixmap.width() / PixelRatio),
+			qRound(Pixmap.height() / PixelRatio));
+	}
+	d->DragPreviewHeader->move(mapFromGlobal(GlobalTopLeft));
+	if (d->DragPreviewHeader->isHidden())
+	{
+		d->DragPreviewHeader->show();
+		d->DragPreviewHeader->raise();
+	}
+	return true;
 }
 
 

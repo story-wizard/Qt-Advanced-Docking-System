@@ -26,12 +26,19 @@ class OverlayGateTest : public QObject
 	Q_OBJECT
 
 private slots:
+	void startDragDistance_isTwiceApplicationThreshold();
 	void dropOverlaysEnabled_defaultsToTrue();
 	void setDropOverlaysEnabled_roundtrips();
 	void setDropOverlaysEnabled_equalValueIsNoOp();
 	void setDropOverlaysEnabled_falseHidesBothOverlays();
 	void dragCancelEvent_isRegisteredAndDistinct();
 };
+
+void OverlayGateTest::startDragDistance_isTwiceApplicationThreshold()
+{
+	QCOMPARE(CDockManager::startDragDistance(),
+		QApplication::startDragDistance() * 2);
+}
 
 void OverlayGateTest::dropOverlaysEnabled_defaultsToTrue()
 {
