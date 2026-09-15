@@ -56,6 +56,16 @@ namespace
 {
 constexpr int ReorderReverseHysteresis = 4;
 constexpr int ExternalPreviewMinimumVisibleTabWidth = 48;
+
+int tabReorderBoundary(const QRect& SiblingGeometry,
+	bool SiblingPrecedesMovingTab, int MovingTabWidth)
+{
+	const int RequiredOverlap = qMax(1,
+		(SiblingGeometry.width() + 2) / 3);
+	return SiblingPrecedesMovingTab
+		? SiblingGeometry.right() - RequiredOverlap + 1
+		: SiblingGeometry.left() + RequiredOverlap - MovingTabWidth;
+}
 }
 
 /**
@@ -74,10 +84,13 @@ struct DockAreaTabBarPrivate
 	int LastReorderDirection = 0;
 	QVector<QPointer<CDockWidgetTab>> ExternalPreviewTabs;
 	QVector<int> ExternalPreviewLayoutIndices;
+	QVector<QRect> ExternalPreviewTabGeometriesGlobal;
+	QVector<int> ExternalPreviewReorderBoundariesGlobal;
 	QSpacerItem* ExternalPreviewSpacer = nullptr;
 	int ExternalPreviewContainerMinimumWidth = -1;
 	int ExternalPreviewHorizontalScroll = -1;
 	int ExternalPreviewRank = -1;
+	int ExternalPreviewLastReorderDirection = 0;
 	int ExternalPreviewWidth = 0;
 
 	/**
@@ -186,18 +199,13 @@ bool DockAreaTabBarPrivate::reorderDraggedTab(CDockWidgetTab* MovingTab,
 		{
 			return false;
 		}
-		for (int i = 0; i + 1 < OriginalTabGeometries.size(); ++i)
-		{
-			const QRect SiblingGeometry = (i < CurrentDragRank)
-				? OriginalTabGeometries.at(i)
-				: OriginalTabGeometries.at(i + 1);
-			const int RequiredOverlap = qMax(1,
-				(SiblingGeometry.width() + 2) / 3);
-			const int Boundary = (i < CurrentDragRank)
-				? SiblingGeometry.right() - RequiredOverlap + 1
-				: SiblingGeometry.left() + RequiredOverlap
-					- MovingTab->width();
-			DragReorderBoundaries.push_back(Boundary);
+	for (int i = 0; i + 1 < OriginalTabGeometries.size(); ++i)
+	{
+		const QRect SiblingGeometry = (i < CurrentDragRank)
+			? OriginalTabGeometries.at(i)
+			: OriginalTabGeometries.at(i + 1);
+		DragReorderBoundaries.push_back(tabReorderBoundary(
+			SiblingGeometry, i < CurrentDragRank, MovingTab->width()));
 		}
 	}
 
@@ -683,9 +691,8 @@ int CDockAreaTabBar::tabInsertIndexAt(const QPoint& Pos) const
 
 //===========================================================================
 int CDockAreaTabBar::previewExternalTabDrag(int DraggedLeftGlobal,
-	int DraggedWidth)
+	int DraggedWidth, int DragDirection)
 {
-	Q_UNUSED(DraggedLeftGlobal)
 	DraggedWidth = qMax(1, DraggedWidth);
 	bool PreviewWidthChanged = false;
 	if (d->ExternalPreviewTabs.isEmpty()
@@ -724,10 +731,86 @@ int CDockAreaTabBar::previewExternalTabDrag(int DraggedLeftGlobal,
 		{
 			parentWidget()->layout()->activate();
 		}
+
+		// Capture stable, gap-free geometry after the receiving title bar has
+		// synchronously yielded any responsive chrome. Once the initial slot is
+		// known below, it is translated into the exact boundary model used by an
+		// ordinary in-row tab drag.
+		d->ExternalPreviewTabGeometriesGlobal.clear();
+		for (auto Tab : d->ExternalPreviewTabs)
+		{
+			if (!Tab)
+			{
+				continue;
+			}
+			const int TabLeftGlobal = Tab->mapToGlobal(QPoint()).x();
+			d->ExternalPreviewTabGeometriesGlobal.push_back(
+				QRect(TabLeftGlobal, 0, Tab->width(), Tab->height()));
+		}
 	}
 
-	const int NewRank = 0;
 	const int PreviousRank = d->ExternalPreviewRank;
+	int NewRank = PreviousRank;
+	if (PreviousRank < 0)
+	{
+		const int DraggedCenterGlobal =
+			DraggedLeftGlobal + DraggedWidth / 2;
+		NewRank = 0;
+		while (NewRank < d->ExternalPreviewTabGeometriesGlobal.size()
+		 && DraggedCenterGlobal >=
+			d->ExternalPreviewTabGeometriesGlobal.at(NewRank).center().x())
+		{
+			++NewRank;
+		}
+
+		d->ExternalPreviewReorderBoundariesGlobal.clear();
+		const int PreviewSpacing = qMax(0, d->TabsLayout->spacing());
+		for (int i = 0;
+			i < d->ExternalPreviewTabGeometriesGlobal.size(); ++i)
+		{
+			QRect Geometry =
+				d->ExternalPreviewTabGeometriesGlobal.at(i);
+			const bool SiblingPrecedesMovingTab = i < NewRank;
+			if (!SiblingPrecedesMovingTab)
+			{
+				Geometry.translate(DraggedWidth + PreviewSpacing, 0);
+			}
+			d->ExternalPreviewReorderBoundariesGlobal.push_back(
+				tabReorderBoundary(Geometry,
+					SiblingPrecedesMovingTab, DraggedWidth));
+		}
+		d->ExternalPreviewLastReorderDirection = 0;
+	}
+	else
+	{
+		if (DragDirection > 0 && PreviousRank
+			< d->ExternalPreviewReorderBoundariesGlobal.size())
+		{
+			const int Hysteresis =
+				d->ExternalPreviewLastReorderDirection < 0
+					? ReorderReverseHysteresis : 0;
+			if (DraggedLeftGlobal >=
+				d->ExternalPreviewReorderBoundariesGlobal.at(PreviousRank)
+					+ Hysteresis)
+			{
+				NewRank = PreviousRank + 1;
+				d->ExternalPreviewLastReorderDirection = 1;
+			}
+		}
+		else if (DragDirection < 0 && PreviousRank > 0)
+		{
+			const int Hysteresis =
+				d->ExternalPreviewLastReorderDirection > 0
+					? ReorderReverseHysteresis : 0;
+			if (DraggedLeftGlobal <=
+				d->ExternalPreviewReorderBoundariesGlobal.at(PreviousRank - 1)
+					- Hysteresis)
+			{
+				NewRank = PreviousRank - 1;
+				d->ExternalPreviewLastReorderDirection = -1;
+			}
+		}
+	}
 	const bool RankChanged = NewRank != PreviousRank;
 	d->ExternalPreviewRank = NewRank;
 
@@ -758,7 +841,7 @@ int CDockAreaTabBar::previewExternalTabDrag(int DraggedLeftGlobal,
 		}
 	}
 
-	// Keep a recognizable portion of the first destination tab visible when a
+	// Keep a recognizable portion of the next destination tab visible when a
 	// wide incoming tab consumes most (or all) of the available tab rail. The
 	// surrounding title bar has already been given a chance to reflow here.
 	// Revealing the whole destination tab would scroll away nearly the insertion
@@ -767,10 +850,13 @@ int CDockAreaTabBar::previewExternalTabDrag(int DraggedLeftGlobal,
 	// destination tab on-screen when reflow alone cannot provide enough room.
 	if (!d->ExternalPreviewTabs.isEmpty())
 	{
-		auto FirstDestinationTab = d->ExternalPreviewTabs.constFirst();
-		if (FirstDestinationTab)
+		const int AnchorRank = qMin(NewRank,
+			d->ExternalPreviewTabs.size() - 1);
+		auto AnchorDestinationTab =
+			d->ExternalPreviewTabs.at(AnchorRank);
+		if (AnchorDestinationTab)
 		{
-			const int VisibleTabWidth = qMin(FirstDestinationTab->width(),
+			const int VisibleTabWidth = qMin(AnchorDestinationTab->width(),
 				qMin(viewport()->width(), qMax(
 					ExternalPreviewMinimumVisibleTabWidth,
 					viewport()->width() / 3)));
@@ -778,7 +864,7 @@ int CDockAreaTabBar::previewExternalTabDrag(int DraggedLeftGlobal,
 				- VisibleTabWidth;
 			const int RequiredScroll = qMax(
 				d->ExternalPreviewHorizontalScroll,
-				FirstDestinationTab->geometry().left()
+				AnchorDestinationTab->geometry().left()
 					- MaximumVisibleLeft);
 			horizontalScrollBar()->setValue(RequiredScroll);
 		}
@@ -821,9 +907,12 @@ void CDockAreaTabBar::clearExternalTabDragPreview()
 	}
 	d->ExternalPreviewTabs.clear();
 	d->ExternalPreviewLayoutIndices.clear();
+	d->ExternalPreviewTabGeometriesGlobal.clear();
+	d->ExternalPreviewReorderBoundariesGlobal.clear();
 	d->ExternalPreviewContainerMinimumWidth = -1;
 	d->ExternalPreviewHorizontalScroll = -1;
 	d->ExternalPreviewRank = -1;
+	d->ExternalPreviewLastReorderDirection = 0;
 	d->ExternalPreviewWidth = 0;
 	if (HadPreview)
 	{

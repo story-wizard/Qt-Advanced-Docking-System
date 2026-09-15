@@ -128,12 +128,13 @@ public:
 	int tabInsertIndexAt(const QPoint& Pos) const;
 
 	/**
-	 * [Wizard NLE fork] Previews an external tab in the first slot without
-	 * changing the real tab or dock-widget order. Existing tabs move right around
-	 * a temporary gap. Cursor-dependent ranking is intentionally deferred until
-	 * this basic destination response is validated.
+	 * [Wizard NLE fork] Previews an external tab at an overlap-selected slot
+	 * without changing the real tab or dock-widget order. Existing tabs move
+	 * around a temporary gap one at a time using the same one-third overlap and
+	 * reverse-hysteresis behavior as an ordinary tab drag.
 	 */
-	int previewExternalTabDrag(int DraggedLeftGlobal, int DraggedWidth);
+	int previewExternalTabDrag(int DraggedLeftGlobal, int DraggedWidth,
+		int DragDirection);
 
 	/**
 	 * [Wizard NLE fork] Returns the width currently reserved for an external

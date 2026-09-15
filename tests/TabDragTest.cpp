@@ -274,8 +274,22 @@ void TabDragTest::externalPreview_shiftsTabsWithoutChangingPanelState()
 		TabBar, &CDockAreaTabBar::externalTabDragPreviewChanged);
 
 	const int PreviewWidth = 80;
-	QCOMPARE(TabBar->previewExternalTabDrag(0,
-		PreviewWidth), 0);
+	const int FirstRequiredOverlap = qMax(1,
+		(FirstTab->width() + 2) / 3);
+	const int SecondRequiredOverlap = qMax(1,
+		(SecondTab->width() + 2) / 3);
+	const int ThirdRequiredOverlap = qMax(1,
+		(ThirdTab->width() + 2) / 3);
+	const int FirstBoundary = FirstTab->mapToGlobal(QPoint()).x()
+		+ FirstRequiredOverlap;
+	const int SecondBoundary = SecondTab->mapToGlobal(QPoint()).x()
+		+ SecondRequiredOverlap;
+	const int ThirdBoundary = ThirdTab->mapToGlobal(QPoint()).x()
+		+ ThirdRequiredOverlap;
+	const int InitialDraggedLeft = FirstTab->mapToGlobal(QPoint()).x()
+		- PreviewWidth / 2;
+	QCOMPARE(TabBar->previewExternalTabDrag(InitialDraggedLeft,
+		PreviewWidth, 0), 0);
 	QCOMPARE(FirstTab->pos(), FirstPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(SecondTab->pos(), SecondPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
@@ -283,9 +297,35 @@ void TabDragTest::externalPreview_shiftsTabsWithoutChangingPanelState()
 	QCOMPARE(ExternalPreviewSpy.count(), 1);
 	QCOMPARE(ExternalPreviewSpy.first().first().toInt(), PreviewWidth);
 
-	// This first validation step deliberately keeps the destination gap in slot
-	// zero regardless of cursor position.
-	QCOMPARE(TabBar->previewExternalTabDrag(1000, PreviewWidth), 0);
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		FirstBoundary, PreviewWidth, 1), 1);
+	QCOMPARE(FirstTab->pos(), FirstPosition);
+	QCOMPARE(SecondTab->pos(), SecondPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
+
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		SecondBoundary, PreviewWidth, 1), 2);
+	QCOMPARE(FirstTab->pos(), FirstPosition);
+	QCOMPARE(SecondTab->pos(), SecondPosition);
+	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
+
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		ThirdBoundary, PreviewWidth, 1), 3);
+	QCOMPARE(FirstTab->pos(), FirstPosition);
+	QCOMPARE(SecondTab->pos(), SecondPosition);
+	QCOMPARE(ThirdTab->pos(), ThirdPosition);
+
+	// Reversing direction requires a small retreat, then restores one sibling
+	// per crossed boundary rather than moving the remaining tabs as a unit.
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		ThirdBoundary - 5, PreviewWidth, -1), 2);
+	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		SecondBoundary - 5, PreviewWidth, -1), 1);
+	QCOMPARE(SecondTab->pos(), SecondPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		FirstBoundary - 5, PreviewWidth, -1), 0);
 	QCOMPARE(FirstTab->pos(), FirstPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(SecondTab->pos(), SecondPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
@@ -332,7 +372,10 @@ void TabDragTest::externalPreview_wideSlotKeepsDestinationTabVisible()
 	const int OriginalScroll = TabBar->horizontalScrollBar()->value();
 	const int PreviewWidth = 240;
 
-	QCOMPARE(TabBar->previewExternalTabDrag(0, PreviewWidth), 0);
+	const int BeforeDestinationBoundary =
+		DestinationTab->mapToGlobal(QPoint()).x() - PreviewWidth / 2;
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		BeforeDestinationBoundary, PreviewWidth, 0), 0);
 	QCOMPARE(DestinationTab->pos(),
 		DestinationPosition + QPoint(PreviewWidth, 0));
 	QVERIFY(TabBar->horizontalScrollBar()->value() > OriginalScroll);
@@ -490,13 +533,41 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	QCOMPARE(FirstLifecycle.Shows, 0);
 	QCOMPARE(FirstLifecycle.Hides, 0);
 
-	sendMouseEvent(FirstTab, QEvent::MouseButtonRelease, TargetHeaderPos,
+	const QPoint AfterTargetHeaderPos =
+		TargetTab->mapToGlobal(TargetTab->rect().center());
+	sendMouseEvent(FirstTab, QEvent::MouseMove, AfterTargetHeaderPos,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(TargetTab->pos(), TargetPosition);
+	QCOMPARE(TargetSecondTab->pos(),
+		TargetSecondPosition + QPoint(InsertionWidth, 0));
+
+	const QPoint AfterTargetSecondHeaderPos =
+		TargetSecondTab->mapToGlobal(TargetSecondTab->rect().center());
+	sendMouseEvent(FirstTab, QEvent::MouseMove, AfterTargetSecondHeaderPos,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(TargetTab->pos(), TargetPosition);
+	QCOMPARE(TargetSecondTab->pos(), TargetSecondPosition);
+
+	// Crossing back over the second boundary moves only that tab out of the
+	// prospective insertion slot.
+	const QPoint BetweenTargetHeaders = TargetTab->mapToGlobal(
+		QPoint(1, TargetTab->rect().center().y()));
+	sendMouseEvent(FirstTab, QEvent::MouseMove, BetweenTargetHeaders,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(TargetTab->pos(), TargetPosition);
+	QCOMPARE(TargetSecondTab->pos(),
+		TargetSecondPosition + QPoint(InsertionWidth, 0));
+	QCOMPARE(TabMovedSpy.count(), 0);
+
+	sendMouseEvent(FirstTab, QEvent::MouseButtonRelease, BetweenTargetHeaders,
 		Qt::LeftButton, Qt::NoButton);
 	QCOMPARE(FirstTab->dragState(), DraggingInactive);
 	QCOMPARE(First->dockAreaWidget(), TargetArea);
 	QCOMPARE(TargetArea->currentDockWidget(), First);
-	QCOMPARE(TargetArea->dockWidget(0), First);
-	QVERIFY(TargetTab->pos().x() > TargetPosition.x());
+	QCOMPARE(TargetArea->dockWidget(0), TargetSibling);
+	QCOMPARE(TargetArea->dockWidget(1), First);
+	QCOMPARE(TargetArea->dockWidget(2), TargetSecond);
+	QVERIFY(TargetSecondTab->pos().x() > TargetSecondPosition.x());
 }
 
 QTEST_MAIN(TabDragTest)

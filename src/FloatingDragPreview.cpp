@@ -55,6 +55,8 @@ struct FloatingDragPreviewPrivate
 	QPointer<CDockAreaWidget> TabReorderArea;
 	int TabReorderIndex = -1;
 	int TabInsertionWidth = 0;
+	int LastDragMouseX = 0;
+	bool HasLastDragMouseX = false;
 	QSize ContentPreviewSize;
 
 	// Wayland hybrid drag: during the in-window phase, hit-testing and overlays
@@ -231,6 +233,12 @@ struct FloatingDragPreviewPrivate
 //============================================================================
 void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 {
+	const int DragDirection = !HasLastDragMouseX ? 0
+		: (GlobalPos.x() > LastDragMouseX ? 1
+			: (GlobalPos.x() < LastDragMouseX ? -1 : 0));
+	LastDragMouseX = GlobalPos.x();
+	HasLastDragMouseX = true;
+
 	if (!_this->isVisible() || !DockManager)
 	{
 		clearTabReorderPreview();
@@ -363,7 +371,7 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 			{
 				TabReorderIndex = TabBar->previewExternalTabDrag(
 					GlobalPos.x() - DragStartMousePosition.x(),
-					TabInsertionWidth);
+					TabInsertionWidth, DragDirection);
 			}
 			ContainerOverlay->hideOverlay();
 			DockAreaOverlay->hideOverlay();
