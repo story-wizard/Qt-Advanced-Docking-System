@@ -110,6 +110,7 @@ enum eStateFileVersion
 static CDockManager::ConfigFlags StaticConfigFlags = CDockManager::DefaultNonOpaqueConfig;
 static CDockManager::AutoHideFlags StaticAutoHideConfigFlags; // auto hide feature is disabled by default
 static QVector<QVariant> StaticConfigParams(CDockManager::ConfigParamCount);
+static qreal StaticStartDragDistanceMultiplier = 2.0;
 // [Wizard NLE fork] Default container edge-band width for HalfPanelDropZones.
 // 24px tested as a comfortable target on 1x and 2x displays. Mutable via
 // CDockManager::setHalfPanelContainerEdgeMargin().
@@ -1397,7 +1398,26 @@ bool CDockManager::isRestoringState() const
 //===========================================================================
 int CDockManager::startDragDistance()
 {
-	return QApplication::startDragDistance() * 2;
+	return qMax(1, qRound(QApplication::startDragDistance()
+		* StaticStartDragDistanceMultiplier));
+}
+
+
+//===========================================================================
+qreal CDockManager::startDragDistanceMultiplier()
+{
+	return StaticStartDragDistanceMultiplier;
+}
+
+
+//===========================================================================
+void CDockManager::setStartDragDistanceMultiplier(qreal Multiplier)
+{
+	if (!qIsFinite(Multiplier) || Multiplier <= 0.0)
+	{
+		return;
+	}
+	StaticStartDragDistanceMultiplier = Multiplier;
 }
 
 

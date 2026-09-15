@@ -793,6 +793,17 @@ public:
 	static int startDragDistance();
 
 	/**
+	 * Returns the multiplier applied to QApplication::startDragDistance().
+	 */
+	static qreal startDragDistanceMultiplier();
+
+	/**
+	 * Sets the multiplier applied to QApplication::startDragDistance().
+	 * Non-finite and non-positive values are ignored.
+	 */
+	static void setStartDragDistanceMultiplier(qreal Multiplier);
+
+	/**
 	 * Helper function to set focus depending on the configuration of the
 	 * FocusStyling flag
 	 */
