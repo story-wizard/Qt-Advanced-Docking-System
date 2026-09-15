@@ -111,6 +111,8 @@ private slots:
 	void inactiveTab_reordersWithoutActivation();
 	void horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail();
 	void externalPreview_shiftsTabsWithoutChangingPanelState();
+	void externalPreview_rapidReversalRetargetsInFlightSlide();
+	void externalPreview_tabRemovalCancelsInFlightSlides();
 	void externalPreview_wideSlotKeepsDestinationTabVisible();
 	void floatingDrag_reenteringSourceHeaderResumesTabReorder();
 	void floatingDrag_enteringAnotherHeaderPreviewsUntilRelease();
@@ -208,6 +210,8 @@ void TabDragTest::inactiveTab_reordersWithoutActivation()
 	QCOMPARE(TabBar->currentTab(), FirstTab);
 	QCOMPARE(CurrentChangingSpy.count(), 0);
 	QCOMPARE(CurrentChangedSpy.count(), 0);
+	QCOMPARE(FirstTab->pos(), QPoint(0, 0));
+	QTRY_COMPARE(FirstTab->pos().x(), SecondTab->width());
 
 	sendMouseEvent(SecondTab, QEvent::MouseButtonRelease, ReorderPos,
 		Qt::LeftButton, Qt::NoButton);
@@ -408,43 +412,50 @@ void TabDragTest::externalPreview_shiftsTabsWithoutChangingPanelState()
 		- PreviewWidth / 2;
 	QCOMPARE(TabBar->previewExternalTabDrag(InitialDraggedLeft,
 		PreviewWidth, 0), 0);
-	QCOMPARE(FirstTab->pos(), FirstPosition + QPoint(PreviewWidth, 0));
-	QCOMPARE(SecondTab->pos(), SecondPosition + QPoint(PreviewWidth, 0));
-	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(FirstTab->pos(), FirstPosition);
+	QTRY_COMPARE(FirstTab->pos(),
+		FirstPosition + QPoint(PreviewWidth, 0));
+	QTRY_COMPARE(SecondTab->pos(),
+		SecondPosition + QPoint(PreviewWidth, 0));
+	QTRY_COMPARE(ThirdTab->pos(),
+		ThirdPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(TabBar->horizontalScrollBar()->value(), 0);
 	QCOMPARE(ExternalPreviewSpy.count(), 1);
 	QCOMPARE(ExternalPreviewSpy.first().first().toInt(), PreviewWidth);
 
 	QCOMPARE(TabBar->previewExternalTabDrag(
 		FirstBoundary, PreviewWidth, 1), 1);
-	QCOMPARE(FirstTab->pos(), FirstPosition);
+	QTRY_COMPARE(FirstTab->pos(), FirstPosition);
 	QCOMPARE(SecondTab->pos(), SecondPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
 
 	QCOMPARE(TabBar->previewExternalTabDrag(
 		SecondBoundary, PreviewWidth, 1), 2);
 	QCOMPARE(FirstTab->pos(), FirstPosition);
-	QCOMPARE(SecondTab->pos(), SecondPosition);
+	QTRY_COMPARE(SecondTab->pos(), SecondPosition);
 	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
 
 	QCOMPARE(TabBar->previewExternalTabDrag(
 		ThirdBoundary, PreviewWidth, 1), 3);
 	QCOMPARE(FirstTab->pos(), FirstPosition);
 	QCOMPARE(SecondTab->pos(), SecondPosition);
-	QCOMPARE(ThirdTab->pos(), ThirdPosition);
+	QTRY_COMPARE(ThirdTab->pos(), ThirdPosition);
 
 	// Reversing direction requires a small retreat, then restores one sibling
 	// per crossed boundary rather than moving the remaining tabs as a unit.
 	QCOMPARE(TabBar->previewExternalTabDrag(
 		ThirdBoundary - 5, PreviewWidth, -1), 2);
-	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
+	QTRY_COMPARE(ThirdTab->pos(),
+		ThirdPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(TabBar->previewExternalTabDrag(
 		SecondBoundary - 5, PreviewWidth, -1), 1);
-	QCOMPARE(SecondTab->pos(), SecondPosition + QPoint(PreviewWidth, 0));
+	QTRY_COMPARE(SecondTab->pos(),
+		SecondPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(TabBar->previewExternalTabDrag(
 		FirstBoundary - 5, PreviewWidth, -1), 0);
-	QCOMPARE(FirstTab->pos(), FirstPosition + QPoint(PreviewWidth, 0));
+	QTRY_COMPARE(FirstTab->pos(),
+		FirstPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(SecondTab->pos(), SecondPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
 	QCOMPARE(ExternalPreviewSpy.count(), 1);
@@ -464,6 +475,75 @@ void TabDragTest::externalPreview_shiftsTabsWithoutChangingPanelState()
 	QCOMPARE(HeaderControl->mapToGlobal(QPoint()), ControlPosition);
 	QCOMPARE(ExternalPreviewSpy.count(), 2);
 	QCOMPARE(ExternalPreviewSpy.last().first().toInt(), 0);
+}
+
+
+void TabDragTest::externalPreview_rapidReversalRetargetsInFlightSlide()
+{
+	CDockManager Manager;
+	Manager.resize(720, 450);
+	auto First = makeDockWidget(Manager, QStringLiteral("First"));
+	auto Second = makeDockWidget(Manager, QStringLiteral("Second"));
+	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, First);
+	Manager.addDockWidgetTabToArea(Second, DockArea);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto TabBar = DockArea->titleBar()->tabBar();
+	auto FirstTab = First->tabWidget();
+	const int FirstStartX = FirstTab->x();
+	const int PreviewWidth = 100;
+	const int FirstRequiredOverlap = qMax(1,
+		(FirstTab->width() + 2) / 3);
+	const int FirstBoundary = FirstTab->mapToGlobal(QPoint()).x()
+		+ FirstRequiredOverlap;
+	const int InitialDraggedLeft = FirstTab->mapToGlobal(QPoint()).x()
+		- PreviewWidth / 2;
+
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		InitialDraggedLeft, PreviewWidth, 0), 0);
+	QCOMPARE(FirstTab->x(), FirstStartX);
+
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		FirstBoundary, PreviewWidth, 1), 1);
+	QCOMPARE(FirstTab->x(), FirstStartX);
+	QTRY_COMPARE(FirstTab->x(), FirstStartX);
+
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		FirstBoundary - 5, PreviewWidth, -1), 0);
+	QCOMPARE(FirstTab->x(), FirstStartX);
+	QTRY_COMPARE(FirstTab->x(), FirstStartX + PreviewWidth);
+
+	TabBar->clearExternalTabDragPreview();
+}
+
+
+void TabDragTest::externalPreview_tabRemovalCancelsInFlightSlides()
+{
+	CDockManager Manager;
+	Manager.resize(720, 450);
+	auto First = makeDockWidget(Manager, QStringLiteral("First"));
+	auto Second = makeDockWidget(Manager, QStringLiteral("Second"));
+	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, First);
+	Manager.addDockWidgetTabToArea(Second, DockArea);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto TabBar = DockArea->titleBar()->tabBar();
+	auto FirstTab = First->tabWidget();
+	const int PreviewWidth = 100;
+	const int InitialDraggedLeft = FirstTab->mapToGlobal(QPoint()).x()
+		- PreviewWidth / 2;
+	QCOMPARE(TabBar->previewExternalTabDrag(
+		InitialDraggedLeft, PreviewWidth, 0), 0);
+	QCOMPARE(FirstTab->x(), 0);
+
+	Manager.removeDockWidget(First);
+	QApplication::processEvents();
+	QCOMPARE(TabBar->count(), 1);
+	QCOMPARE(TabBar->externalTabDragPreviewWidth(), 0);
+	QTest::qWait(100);
+	QCOMPARE(TabBar->count(), 1);
 }
 
 
@@ -494,7 +574,7 @@ void TabDragTest::externalPreview_wideSlotKeepsDestinationTabVisible()
 		DestinationTab->mapToGlobal(QPoint()).x() - PreviewWidth / 2;
 	QCOMPARE(TabBar->previewExternalTabDrag(
 		BeforeDestinationBoundary, PreviewWidth, 0), 0);
-	QCOMPARE(DestinationTab->pos(),
+	QTRY_COMPARE(DestinationTab->pos(),
 		DestinationPosition + QPoint(PreviewWidth, 0));
 	QVERIFY(TabBar->horizontalScrollBar()->value() > OriginalScroll);
 	const QRect DestinationViewportRect(
@@ -638,9 +718,9 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	QVERIFY(Preview);
 	QCOMPARE(Preview->height(), FirstTab->height());
 	QCOMPARE(Preview->width(), FirstTab->width());
-	QCOMPARE(TargetTab->pos(),
+	QTRY_COMPARE(TargetTab->pos(),
 		TargetPosition + QPoint(InsertionWidth, 0));
-	QCOMPARE(TargetSecondTab->pos(),
+	QTRY_COMPARE(TargetSecondTab->pos(),
 		TargetSecondPosition + QPoint(InsertionWidth, 0));
 	const QRect TargetViewportRect(
 		TargetTab->mapTo(TargetTabBar->viewport(), QPoint()),
@@ -658,7 +738,7 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 		TargetTab->mapToGlobal(TargetTab->rect().center());
 	sendMouseEvent(FirstTab, QEvent::MouseMove, AfterTargetHeaderPos,
 		Qt::NoButton, Qt::LeftButton);
-	QCOMPARE(TargetTab->pos(), TargetPosition);
+	QTRY_COMPARE(TargetTab->pos(), TargetPosition);
 	QCOMPARE(TargetSecondTab->pos(),
 		TargetSecondPosition + QPoint(InsertionWidth, 0));
 
@@ -667,7 +747,7 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	sendMouseEvent(FirstTab, QEvent::MouseMove, AfterTargetSecondHeaderPos,
 		Qt::NoButton, Qt::LeftButton);
 	QCOMPARE(TargetTab->pos(), TargetPosition);
-	QCOMPARE(TargetSecondTab->pos(), TargetSecondPosition);
+	QTRY_COMPARE(TargetSecondTab->pos(), TargetSecondPosition);
 
 	// Crossing back over the second boundary moves only that tab out of the
 	// prospective insertion slot.
@@ -676,7 +756,7 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	sendMouseEvent(FirstTab, QEvent::MouseMove, BetweenTargetHeaders,
 		Qt::NoButton, Qt::LeftButton);
 	QCOMPARE(TargetTab->pos(), TargetPosition);
-	QCOMPARE(TargetSecondTab->pos(),
+	QTRY_COMPARE(TargetSecondTab->pos(),
 		TargetSecondPosition + QPoint(InsertionWidth, 0));
 	QCOMPARE(TabMovedSpy.count(), 0);
 
@@ -754,7 +834,7 @@ void TabDragTest::floatingDrag_singleTabSourceUsesLiveTabSnapshot()
 	QCOMPARE(TargetTabBar->externalTabDragPreviewWidth(),
 		ExpandedTabWidth);
 	QCOMPARE(TargetTab->pos(), TargetPosition);
-	QCOMPARE(TargetSecondTab->pos(),
+	QTRY_COMPARE(TargetSecondTab->pos(),
 		TargetSecondPosition + QPoint(ExpandedTabWidth, 0));
 
 	sendMouseEvent(SourceTab, QEvent::MouseButtonRelease, TargetHeaderPos,

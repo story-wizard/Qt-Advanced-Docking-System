@@ -31,8 +31,10 @@
 #include "DockAreaTabBar.h"
 
 #include <QMouseEvent>
+#include <QHash>
 #include <QPointer>
 #include <QScrollBar>
+#include <QVariantAnimation>
 #include <QDebug>
 #include <QBoxLayout>
 #include <QApplication>
@@ -48,6 +50,7 @@
 #include "DockWidgetTab.h"
 
 #include <iostream>
+#include <utility>
 
 
 namespace ads
@@ -56,6 +59,7 @@ namespace
 {
 constexpr int ReorderReverseHysteresis = 4;
 constexpr int ExternalPreviewMinimumVisibleTabWidth = 48;
+constexpr int TabSlideAnimationDurationMs = 85;
 
 int tabReorderBoundary(const QRect& SiblingGeometry,
 	bool SiblingPrecedesMovingTab, int MovingTabWidth)
@@ -92,6 +96,14 @@ struct DockAreaTabBarPrivate
 	int ExternalPreviewRank = -1;
 	int ExternalPreviewLastReorderDirection = 0;
 	int ExternalPreviewWidth = 0;
+	struct TabSlide
+	{
+		QPointer<CDockWidgetTab> Tab;
+		QPoint StartPosition;
+		QPoint TargetPosition;
+	};
+	QVector<TabSlide> TabSlides;
+	QPointer<QVariantAnimation> TabSlideAnimation;
 
 	/**
 	 * Private data constructor
@@ -119,6 +131,26 @@ struct DockAreaTabBarPrivate
 	 */
 	bool reorderDraggedTab(CDockWidgetTab* MovingTab, int DraggedLeftX,
 		int DragDirection, int DragOriginLeftX);
+
+	/**
+	 * Captures the current visual position of every visible tab except the
+	 * pointer-locked dragged tab.
+	 */
+	QHash<CDockWidgetTab*, QPoint> captureTabPositions(
+		CDockWidgetTab* ExcludedTab = nullptr) const;
+
+	/**
+	 * Stops in-flight visual slides at their current positions. The caller owns
+	 * the following layout mutation and will establish fresh target positions.
+	 */
+	void stopTabSlideAnimations();
+
+	/**
+	 * Animates tabs from captured visual positions to their authoritative
+	 * post-layout positions. Logical order has already changed at this point.
+	 */
+	void animateTabsFrom(
+		const QHash<CDockWidgetTab*, QPoint>& StartPositions);
 };
 // struct DockAreaTabBarPrivate
 
@@ -127,6 +159,117 @@ DockAreaTabBarPrivate::DockAreaTabBarPrivate(CDockAreaTabBar* _public) :
 	_this(_public)
 {
 
+}
+
+
+//============================================================================
+QHash<CDockWidgetTab*, QPoint>
+DockAreaTabBarPrivate::captureTabPositions(CDockWidgetTab* ExcludedTab) const
+{
+	QHash<CDockWidgetTab*, QPoint> Positions;
+	for (int i = 0; i < _this->count(); ++i)
+	{
+		auto Tab = _this->tab(i);
+		if (!Tab || Tab == ExcludedTab || !Tab->isVisibleTo(_this))
+		{
+			continue;
+		}
+		Positions.insert(Tab, Tab->pos());
+	}
+	return Positions;
+}
+
+
+//============================================================================
+void DockAreaTabBarPrivate::stopTabSlideAnimations()
+{
+	auto Animation = TabSlideAnimation;
+	TabSlideAnimation = nullptr;
+	TabSlides.clear();
+	if (Animation)
+	{
+		Animation->stop();
+		Animation->deleteLater();
+	}
+}
+
+
+//============================================================================
+void DockAreaTabBarPrivate::animateTabsFrom(
+	const QHash<CDockWidgetTab*, QPoint>& StartPositions)
+{
+	QVector<TabSlide> Slides;
+	for (auto It = StartPositions.cbegin(); It != StartPositions.cend(); ++It)
+	{
+		auto Tab = It.key();
+		if (!Tab || TabsLayout->indexOf(Tab) < 0 || !Tab->isVisibleTo(_this))
+		{
+			continue;
+		}
+
+		const QPoint StartPosition = It.value();
+		const QPoint TargetPosition = Tab->pos();
+		if (StartPosition == TargetPosition)
+		{
+			continue;
+		}
+
+		Tab->move(StartPosition);
+		Slides.push_back({Tab, StartPosition, TargetPosition});
+	}
+
+	if (Slides.isEmpty())
+	{
+		return;
+	}
+
+	TabSlides = std::move(Slides);
+	auto Animation = new QVariantAnimation(_this);
+	Animation->setDuration(TabSlideAnimationDurationMs);
+	Animation->setEasingCurve(QEasingCurve::OutCubic);
+	Animation->setStartValue(0.0);
+	Animation->setEndValue(1.0);
+	TabSlideAnimation = Animation;
+
+	QObject::connect(Animation, &QVariantAnimation::valueChanged, _this,
+		[this, Animation](const QVariant& Value)
+		{
+			if (TabSlideAnimation != Animation)
+			{
+				return;
+			}
+			const qreal Progress = Value.toReal();
+			for (const auto& Slide : TabSlides)
+			{
+				if (!Slide.Tab)
+				{
+					continue;
+				}
+				const QPoint Delta = Slide.TargetPosition - Slide.StartPosition;
+				Slide.Tab->move(Slide.StartPosition + QPoint(
+					qRound(Delta.x() * Progress),
+					qRound(Delta.y() * Progress)));
+			}
+		});
+	QObject::connect(Animation, &QVariantAnimation::finished, _this,
+		[this, Animation]
+		{
+			if (TabSlideAnimation != Animation)
+			{
+				return;
+			}
+			for (const auto& Slide : TabSlides)
+			{
+				if (Slide.Tab)
+				{
+					Slide.Tab->move(Slide.TargetPosition);
+				}
+			}
+			TabSlides.clear();
+			TabSlideAnimation = nullptr;
+			Animation->deleteLater();
+		});
+	Animation->start();
 }
 
 
@@ -275,14 +418,19 @@ bool DockAreaTabBarPrivate::reorderDraggedTab(CDockWidgetTab* MovingTab,
 	// the dragged tab is reserved for a completed click or drop.
 	auto CurrentTab = _this->currentTab();
 	const QPoint DraggedPosition = MovingTab->pos();
+	const auto StartPositions = captureTabPositions(MovingTab);
+	stopTabSlideAnimations();
 	TabsLayout->removeWidget(MovingTab);
 	TabsLayout->insertWidget(ToIndex, MovingTab);
 	TabsLayout->activate();
-	MovingTab->move(DraggedPosition);
-	MovingTab->raise();
 	ADS_PRINT("tabMoved from " << FromIndex << " to " << ToIndex);
 	Q_EMIT _this->tabMoved(FromIndex, ToIndex);
 	_this->setCurrentIndex(TabsLayout->indexOf(CurrentTab));
+	TabsLayout->invalidate();
+	TabsLayout->activate();
+	animateTabsFrom(StartPositions);
+	MovingTab->move(DraggedPosition);
+	MovingTab->raise();
 	CurrentDragRank += DragDirection;
 	LastReorderDirection = DragDirection;
 	return true;
@@ -318,6 +466,7 @@ CDockAreaTabBar::CDockAreaTabBar(CDockAreaWidget* parent) :
 //============================================================================
 CDockAreaTabBar::~CDockAreaTabBar()
 {
+	d->stopTabSlideAnimations();
 	delete d;
 }
 
@@ -560,6 +709,7 @@ void CDockAreaTabBar::onTabWidgetMoved(const QPoint& GlobalPos)
 	d->CurrentDragRank = -1;
 	d->LastReorderDirection = 0;
 	// Ensure that the released tab is seated in its layout slot.
+	d->stopTabSlideAnimations();
 	d->TabsLayout->invalidate();
 	d->TabsLayout->activate();
 }
@@ -699,9 +849,14 @@ int CDockAreaTabBar::previewExternalTabDrag(int DraggedLeftGlobal,
 {
 	DraggedWidth = qMax(1, DraggedWidth);
 	bool PreviewWidthChanged = false;
+	bool AnimateLayoutChange = false;
+	QHash<CDockWidgetTab*, QPoint> StartPositions;
 	if (d->ExternalPreviewTabs.isEmpty()
 	 || d->ExternalPreviewWidth != DraggedWidth)
 	{
+		StartPositions = d->captureTabPositions();
+		d->stopTabSlideAnimations();
+		AnimateLayoutChange = true;
 		clearExternalTabDragPreview();
 		d->TabsLayout->activate();
 		d->ExternalPreviewWidth = DraggedWidth;
@@ -820,6 +975,12 @@ int CDockAreaTabBar::previewExternalTabDrag(int DraggedLeftGlobal,
 
 	if (!d->ExternalPreviewSpacer || RankChanged)
 	{
+		if (!AnimateLayoutChange)
+		{
+			StartPositions = d->captureTabPositions();
+			d->stopTabSlideAnimations();
+			AnimateLayoutChange = true;
+		}
 		if (d->ExternalPreviewSpacer)
 		{
 			d->TabsLayout->removeItem(d->ExternalPreviewSpacer);
@@ -873,6 +1034,10 @@ int CDockAreaTabBar::previewExternalTabDrag(int DraggedLeftGlobal,
 			horizontalScrollBar()->setValue(RequiredScroll);
 		}
 	}
+	if (AnimateLayoutChange)
+	{
+		d->animateTabsFrom(StartPositions);
+	}
 	viewport()->update();
 
 	if (NewRank < d->ExternalPreviewLayoutIndices.size())
@@ -893,6 +1058,7 @@ int CDockAreaTabBar::externalTabDragPreviewWidth() const
 //===========================================================================
 void CDockAreaTabBar::clearExternalTabDragPreview()
 {
+	d->stopTabSlideAnimations();
 	const bool HadPreview = d->ExternalPreviewWidth > 0;
 	if (d->ExternalPreviewSpacer)
 	{
