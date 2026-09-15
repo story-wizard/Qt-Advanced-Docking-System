@@ -55,6 +55,7 @@ namespace ads
 namespace
 {
 constexpr int ReorderReverseHysteresis = 4;
+constexpr int ExternalPreviewMinimumVisibleTabWidth = 48;
 }
 
 /**
@@ -71,6 +72,13 @@ struct DockAreaTabBarPrivate
 	QVector<int> DragReorderBoundaries;
 	int CurrentDragRank = -1;
 	int LastReorderDirection = 0;
+	QVector<QPointer<CDockWidgetTab>> ExternalPreviewTabs;
+	QVector<int> ExternalPreviewLayoutIndices;
+	QSpacerItem* ExternalPreviewSpacer = nullptr;
+	int ExternalPreviewContainerMinimumWidth = -1;
+	int ExternalPreviewHorizontalScroll = -1;
+	int ExternalPreviewRank = -1;
+	int ExternalPreviewWidth = 0;
 
 	/**
 	 * Private data constructor
@@ -334,13 +342,15 @@ void CDockAreaTabBar::setCurrentIndex(int index)
 int CDockAreaTabBar::count() const
 {
 	// The tab bar contains a stretch item as last item
-	return d->TabsLayout->count() - 1;
+	return d->TabsLayout->count() - 1
+		- (d->ExternalPreviewSpacer ? 1 : 0);
 }
 
 
 //===========================================================================
 void CDockAreaTabBar::insertTab(int Index, CDockWidgetTab* Tab)
 {
+	clearExternalTabDragPreview();
 	d->TabsLayout->insertWidget(Index, Tab);
 	connect(Tab, SIGNAL(clicked()), this, SLOT(onTabClicked()));
 	connect(Tab, SIGNAL(closeRequested()), this, SLOT(onTabCloseRequested()));
@@ -371,6 +381,7 @@ void CDockAreaTabBar::removeTab(CDockWidgetTab* Tab)
 	{
 		return;
 	}
+	clearExternalTabDragPreview();
     ADS_PRINT("CDockAreaTabBar::removeTab ");
 	int NewCurrentIndex = currentIndex();
 	int RemoveIndex = d->TabsLayout->indexOf(Tab);
@@ -498,7 +509,23 @@ CDockWidgetTab* CDockAreaTabBar::tab(int Index) const
 	{
 		return nullptr;
 	}
-	return qobject_cast<CDockWidgetTab*>(d->TabsLayout->itemAt(Index)->widget());
+
+	int TabIndex = 0;
+	for (int i = 0; i < d->TabsLayout->count(); ++i)
+	{
+		auto Tab = qobject_cast<CDockWidgetTab*>(
+			d->TabsLayout->itemAt(i)->widget());
+		if (!Tab)
+		{
+			continue;
+		}
+		if (TabIndex == Index)
+		{
+			return Tab;
+		}
+		++TabIndex;
+	}
+	return nullptr;
 }
 
 
@@ -651,6 +678,165 @@ int CDockAreaTabBar::tabInsertIndexAt(const QPoint& Pos) const
 	{
 		return (Index < 0) ? 0 : Index;
 	}
+}
+
+
+//===========================================================================
+int CDockAreaTabBar::previewExternalTabDrag(int DraggedLeftGlobal,
+	int DraggedWidth)
+{
+	Q_UNUSED(DraggedLeftGlobal)
+	DraggedWidth = qMax(1, DraggedWidth);
+	bool PreviewWidthChanged = false;
+	if (d->ExternalPreviewTabs.isEmpty()
+	 || d->ExternalPreviewWidth != DraggedWidth)
+	{
+		clearExternalTabDragPreview();
+		d->TabsLayout->activate();
+		d->ExternalPreviewWidth = DraggedWidth;
+		PreviewWidthChanged = true;
+		d->ExternalPreviewContainerMinimumWidth =
+			d->TabsContainerWidget->minimumWidth();
+		d->ExternalPreviewHorizontalScroll = horizontalScrollBar()->value();
+		d->TabsContainerWidget->setMinimumWidth(
+			d->TabsLayout->sizeHint().width() + DraggedWidth
+			+ d->TabsLayout->spacing());
+
+		for (int i = 0; i < count(); ++i)
+		{
+			auto Tab = tab(i);
+			if (!Tab || !Tab->isVisibleTo(this))
+			{
+				continue;
+			}
+
+			d->ExternalPreviewTabs.push_back(Tab);
+			d->ExternalPreviewLayoutIndices.push_back(
+				d->TabsLayout->indexOf(Tab));
+		}
+	}
+	if (PreviewWidthChanged)
+	{
+		Q_EMIT externalTabDragPreviewChanged(DraggedWidth);
+		d->TabsLayout->activate();
+		updateGeometry();
+		if (parentWidget() && parentWidget()->layout())
+		{
+			parentWidget()->layout()->activate();
+		}
+	}
+
+	const int NewRank = 0;
+	const int PreviousRank = d->ExternalPreviewRank;
+	const bool RankChanged = NewRank != PreviousRank;
+	d->ExternalPreviewRank = NewRank;
+
+	if (!d->ExternalPreviewSpacer || RankChanged)
+	{
+		if (d->ExternalPreviewSpacer)
+		{
+			d->TabsLayout->removeItem(d->ExternalPreviewSpacer);
+		}
+		else
+		{
+			d->ExternalPreviewSpacer = new QSpacerItem(DraggedWidth, 0,
+				QSizePolicy::Fixed, QSizePolicy::Minimum);
+		}
+
+		const int LayoutIndex = NewRank <
+			d->ExternalPreviewLayoutIndices.size()
+			? d->ExternalPreviewLayoutIndices.at(NewRank)
+			: d->TabsLayout->count() - 1;
+		d->TabsLayout->insertItem(LayoutIndex,
+			d->ExternalPreviewSpacer);
+		d->TabsLayout->invalidate();
+		d->TabsLayout->activate();
+		updateGeometry();
+		if (parentWidget() && parentWidget()->layout())
+		{
+			parentWidget()->layout()->activate();
+		}
+	}
+
+	// Keep a recognizable portion of the first destination tab visible when a
+	// wide incoming tab consumes most (or all) of the available tab rail. The
+	// surrounding title bar has already been given a chance to reflow here.
+	// Revealing the whole destination tab would scroll away nearly the insertion
+	// shift, making the tab appear stationary. Instead, preserve the visible
+	// rightward movement and scroll only enough to leave an anchored slice of the
+	// destination tab on-screen when reflow alone cannot provide enough room.
+	if (!d->ExternalPreviewTabs.isEmpty())
+	{
+		auto FirstDestinationTab = d->ExternalPreviewTabs.constFirst();
+		if (FirstDestinationTab)
+		{
+			const int VisibleTabWidth = qMin(FirstDestinationTab->width(),
+				qMin(viewport()->width(), qMax(
+					ExternalPreviewMinimumVisibleTabWidth,
+					viewport()->width() / 3)));
+			const int MaximumVisibleLeft = viewport()->width()
+				- VisibleTabWidth;
+			const int RequiredScroll = qMax(
+				d->ExternalPreviewHorizontalScroll,
+				FirstDestinationTab->geometry().left()
+					- MaximumVisibleLeft);
+			horizontalScrollBar()->setValue(RequiredScroll);
+		}
+	}
+	viewport()->update();
+
+	if (NewRank < d->ExternalPreviewLayoutIndices.size())
+	{
+		return d->ExternalPreviewLayoutIndices.at(NewRank);
+	}
+	return count();
+}
+
+
+//===========================================================================
+int CDockAreaTabBar::externalTabDragPreviewWidth() const
+{
+	return d->ExternalPreviewWidth;
+}
+
+
+//===========================================================================
+void CDockAreaTabBar::clearExternalTabDragPreview()
+{
+	const bool HadPreview = d->ExternalPreviewWidth > 0;
+	if (d->ExternalPreviewSpacer)
+	{
+		d->TabsLayout->removeItem(d->ExternalPreviewSpacer);
+		delete d->ExternalPreviewSpacer;
+		d->ExternalPreviewSpacer = nullptr;
+	}
+	if (d->ExternalPreviewContainerMinimumWidth >= 0)
+	{
+		d->TabsContainerWidget->setMinimumWidth(
+			d->ExternalPreviewContainerMinimumWidth);
+	}
+	if (d->ExternalPreviewHorizontalScroll >= 0)
+	{
+		horizontalScrollBar()->setValue(d->ExternalPreviewHorizontalScroll);
+	}
+	d->ExternalPreviewTabs.clear();
+	d->ExternalPreviewLayoutIndices.clear();
+	d->ExternalPreviewContainerMinimumWidth = -1;
+	d->ExternalPreviewHorizontalScroll = -1;
+	d->ExternalPreviewRank = -1;
+	d->ExternalPreviewWidth = 0;
+	if (HadPreview)
+	{
+		Q_EMIT externalTabDragPreviewChanged(0);
+	}
+	d->TabsLayout->invalidate();
+	d->TabsLayout->activate();
+	updateGeometry();
+	if (parentWidget() && parentWidget()->layout())
+	{
+		parentWidget()->layout()->activate();
+	}
+	viewport()->update();
 }
 
 

@@ -78,6 +78,7 @@ struct DockWidgetTabPrivate
 	QSpacerItem* IconTextSpacer;
 	QPoint TabDragStartPosition;
 	QSize IconSize;
+	int DragStartTabWidth = 0;
 
 	/**
 	 * Private data constructor
@@ -117,6 +118,12 @@ struct DockWidgetTabPrivate
 	 * drag.
 	 */
 	void waylandPreviewMove(QMouseEvent* ev);
+
+	/**
+	 * Ends the floating-preview phase when a tab enters a dock-area header and
+	 * resumes the same gesture as an in-header tab reorder.
+	 */
+	bool tryResumeTabDrag(QMouseEvent* ev);
 
 	/**
 	 * Returns true if the given config flag is set
@@ -434,6 +441,56 @@ void DockWidgetTabPrivate::waylandPreviewMove(QMouseEvent* ev)
 
 
 //============================================================================
+bool DockWidgetTabPrivate::tryResumeTabDrag(QMouseEvent* ev)
+{
+	if (!isDraggingState(DraggingFloatingWidget) || !FloatingWidget)
+	{
+		return false;
+	}
+
+	auto Preview = static_cast<CFloatingDragPreview*>(FloatingWidget);
+	auto PreviousDockArea = DockArea;
+	if (!Preview->finishDraggingToSourceTabBar())
+	{
+		return false;
+	}
+
+	FloatingWidget = nullptr;
+	DockArea = DockWidget->dockAreaWidget();
+	if (!DockArea)
+	{
+		DragState = DraggingInactive;
+		return true;
+	}
+
+	DragState = DraggingTab;
+	if (DockArea != PreviousDockArea)
+	{
+		if (_this->parentWidget() && _this->parentWidget()->layout())
+		{
+			_this->parentWidget()->layout()->activate();
+		}
+		TabDragStartPosition = _this->pos();
+		saveDragStartMousePosition(internal::globalPositionOf(ev));
+		if (ev->spontaneous() && QWidget::mouseGrabber() != _this)
+		{
+			_this->grabMouse();
+		}
+	}
+	else
+	{
+		// The original gesture coordinates keep the tab directly under the
+		// cursor when it returns to its own header, including after a previous
+		// horizontal reorder.
+		moveTab(ev);
+	}
+
+	_this->raise();
+	return true;
+}
+
+
+//============================================================================
 CDockWidgetTab::CDockWidgetTab(CDockWidget* DockWidget, QWidget *parent) :
 	QFrame(parent),
 	d(new DockWidgetTabPrivate(this))
@@ -458,6 +515,7 @@ void CDockWidgetTab::mousePressEvent(QMouseEvent* ev)
 	if (ev->button() == Qt::LeftButton)
 	{
 		ev->accept();
+		d->DragStartTabWidth = width();
         d->saveDragStartMousePosition(internal::globalPositionOf(ev));
         d->DragState = DraggingMousePressed;
         if (CDockManager::testConfigFlag(CDockManager::FocusHighlighting))
@@ -481,6 +539,7 @@ void CDockWidgetTab::mouseReleaseEvent(QMouseEvent* ev)
 		auto CurrentDragState = d->DragState;
 		d->GlobalDragStartMousePosition = QPoint();
 		d->DragStartMousePosition = QPoint();
+		d->DragStartTabWidth = 0;
 		d->DragState = DraggingInactive;
 
 		switch (CurrentDragState)
@@ -501,6 +560,11 @@ void CDockWidgetTab::mouseReleaseEvent(QMouseEvent* ev)
 
 		default:
 			break;
+		}
+
+		if (QWidget::mouseGrabber() == this)
+		{
+			releaseMouse();
 		}
 
 		if (CDockManager::testConfigFlag(CDockManager::FocusHighlighting))
@@ -546,8 +610,14 @@ void CDockWidgetTab::mouseMoveEvent(QMouseEvent* ev)
         }
         else
         {
-            d->FloatingWidget->moveFloating();
+			auto Preview = static_cast<CFloatingDragPreview*>(d->FloatingWidget);
+			Preview->moveFloating(internal::globalPositionOf(ev));
         }
+		if (d->tryResumeTabDrag(ev))
+		{
+			ev->accept();
+			return;
+		}
         Super::mouseMoveEvent(ev);
         return;
     }
@@ -586,11 +656,15 @@ void CDockWidgetTab::mouseMoveEvent(QMouseEvent* ev)
 		auto Features = d->DockWidget->features();
         if (Features.testFlag(CDockWidget::DockWidgetFloatable) || (Features.testFlag(CDockWidget::DockWidgetMovable)))
         {
-        	// If we undock, we need to restore the initial position of this
-        	// tab because it looks strange if it remains on its dragged position
+			// If we undock, we need to restore the initial position of this
+			// tab because it looks strange if it remains on its dragged position
         	if (d->isDraggingState(DraggingTab))
 			{
-        		parentWidget()->layout()->update();
+				Q_EMIT moved(internal::globalPositionOf(ev));
+			}
+			else
+			{
+				d->TabDragStartPosition = pos();
 			}
             d->startFloating();
         }
@@ -792,6 +866,13 @@ const QIcon& CDockWidgetTab::icon() const
 QString CDockWidgetTab::text() const
 {
 	return d->TitleLabel->text();
+}
+
+
+//============================================================================
+int CDockWidgetTab::dragStartTabWidth() const
+{
+	return d->DragStartTabWidth;
 }
 
 

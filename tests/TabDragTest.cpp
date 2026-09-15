@@ -4,14 +4,18 @@
 
 #include <QtTest/QtTest>
 
+#include <algorithm>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QScrollBar>
 #include <QSignalSpy>
 
 #include "DockAreaTabBar.h"
 #include "DockAreaTitleBar.h"
 #include "DockAreaWidget.h"
+#include "FloatingDragPreview.h"
 #include "DockManager.h"
+#include "DockOverlay.h"
 #include "DockWidget.h"
 #include "DockWidgetTab.h"
 
@@ -77,6 +81,13 @@ CDockWidget* makeDockWidget(CDockManager& Manager, const QString& Title)
 	return DockWidget;
 }
 
+bool anyDockOverlayVisible(CDockManager& Manager)
+{
+	const auto Overlays = Manager.findChildren<CDockOverlay*>();
+	return std::any_of(Overlays.cbegin(), Overlays.cend(),
+		[](const CDockOverlay* Overlay) { return Overlay->isVisible(); });
+}
+
 }
 
 class TabDragTest : public QObject
@@ -85,6 +96,10 @@ class TabDragTest : public QObject
 
 private slots:
 	void horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail();
+	void externalPreview_shiftsTabsWithoutChangingPanelState();
+	void externalPreview_wideSlotKeepsDestinationTabVisible();
+	void floatingDrag_reenteringSourceHeaderResumesTabReorder();
+	void floatingDrag_enteringAnotherHeaderPreviewsUntilRelease();
 };
 
 void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
@@ -227,6 +242,261 @@ void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
 		Qt::LeftButton, Qt::NoButton);
 	QCOMPARE(FirstTab->dragState(), DraggingInactive);
 	QCOMPARE(FirstTab->pos(), QPoint(0, 0));
+}
+
+
+void TabDragTest::externalPreview_shiftsTabsWithoutChangingPanelState()
+{
+	CDockManager Manager;
+	Manager.resize(720, 450);
+	auto First = makeDockWidget(Manager, QStringLiteral("First"));
+	auto Second = makeDockWidget(Manager, QStringLiteral("Second"));
+	auto Third = makeDockWidget(Manager, QStringLiteral("Third"));
+	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, First);
+	Manager.addDockWidgetTabToArea(Second, DockArea);
+	Manager.addDockWidgetTabToArea(Third, DockArea);
+	DockArea->setCurrentDockWidget(Second);
+	auto HeaderControl = new QLabel(QStringLiteral("Zoom"));
+	DockArea->titleBar()->insertWidget(1, HeaderControl);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto TabBar = DockArea->titleBar()->tabBar();
+	auto FirstTab = First->tabWidget();
+	auto SecondTab = Second->tabWidget();
+	auto ThirdTab = Third->tabWidget();
+	const QPoint FirstPosition = FirstTab->pos();
+	const QPoint SecondPosition = SecondTab->pos();
+	const QPoint ThirdPosition = ThirdTab->pos();
+	const QPoint ControlPosition = HeaderControl->mapToGlobal(QPoint());
+	QSignalSpy TabMovedSpy(TabBar, &CDockAreaTabBar::tabMoved);
+	QSignalSpy ExternalPreviewSpy(
+		TabBar, &CDockAreaTabBar::externalTabDragPreviewChanged);
+
+	const int PreviewWidth = 80;
+	QCOMPARE(TabBar->previewExternalTabDrag(0,
+		PreviewWidth), 0);
+	QCOMPARE(FirstTab->pos(), FirstPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(SecondTab->pos(), SecondPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(TabBar->horizontalScrollBar()->value(), 0);
+	QCOMPARE(ExternalPreviewSpy.count(), 1);
+	QCOMPARE(ExternalPreviewSpy.first().first().toInt(), PreviewWidth);
+
+	// This first validation step deliberately keeps the destination gap in slot
+	// zero regardless of cursor position.
+	QCOMPARE(TabBar->previewExternalTabDrag(1000, PreviewWidth), 0);
+	QCOMPARE(FirstTab->pos(), FirstPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(SecondTab->pos(), SecondPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(ThirdTab->pos(), ThirdPosition + QPoint(PreviewWidth, 0));
+	QCOMPARE(ExternalPreviewSpy.count(), 1);
+
+	QCOMPARE(DockArea->dockWidget(0), First);
+	QCOMPARE(DockArea->dockWidget(1), Second);
+	QCOMPARE(DockArea->dockWidget(2), Third);
+	QCOMPARE(DockArea->currentDockWidget(), Second);
+	QCOMPARE(TabMovedSpy.count(), 0);
+	QCOMPARE(HeaderControl->mapToGlobal(QPoint()),
+		ControlPosition + QPoint(PreviewWidth, 0));
+
+	TabBar->clearExternalTabDragPreview();
+	QCOMPARE(FirstTab->pos(), FirstPosition);
+	QCOMPARE(SecondTab->pos(), SecondPosition);
+	QCOMPARE(ThirdTab->pos(), ThirdPosition);
+	QCOMPARE(HeaderControl->mapToGlobal(QPoint()), ControlPosition);
+	QCOMPARE(ExternalPreviewSpy.count(), 2);
+	QCOMPARE(ExternalPreviewSpy.last().first().toInt(), 0);
+}
+
+
+void TabDragTest::externalPreview_wideSlotKeepsDestinationTabVisible()
+{
+	CDockManager Manager;
+	Manager.resize(520, 360);
+	auto Destination = makeDockWidget(Manager,
+		QStringLiteral("Destination"));
+	auto DestinationSecond = makeDockWidget(Manager,
+		QStringLiteral("Destination Two"));
+	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, Destination);
+	Manager.addDockWidgetTabToArea(DestinationSecond, DockArea);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto TabBar = DockArea->titleBar()->tabBar();
+	TabBar->setFixedWidth(160);
+	QApplication::processEvents();
+	auto DestinationTab = Destination->tabWidget();
+	const QPoint DestinationPosition = DestinationTab->pos();
+	const int DestinationViewportLeft = DestinationTab->mapTo(
+		TabBar->viewport(), QPoint()).x();
+	const int OriginalScroll = TabBar->horizontalScrollBar()->value();
+	const int PreviewWidth = 240;
+
+	QCOMPARE(TabBar->previewExternalTabDrag(0, PreviewWidth), 0);
+	QCOMPARE(DestinationTab->pos(),
+		DestinationPosition + QPoint(PreviewWidth, 0));
+	QVERIFY(TabBar->horizontalScrollBar()->value() > OriginalScroll);
+	const QRect DestinationViewportRect(
+		DestinationTab->mapTo(TabBar->viewport(), QPoint()),
+		DestinationTab->size());
+	QVERIFY(DestinationViewportRect.intersects(TabBar->viewport()->rect()));
+	QVERIFY(DestinationViewportRect.left() > DestinationViewportLeft);
+	QVERIFY(DestinationViewportRect.intersected(
+		TabBar->viewport()->rect()).width() >= 48);
+
+	TabBar->clearExternalTabDragPreview();
+	QCOMPARE(DestinationTab->pos(), DestinationPosition);
+	QCOMPARE(TabBar->horizontalScrollBar()->value(), OriginalScroll);
+}
+
+
+void TabDragTest::floatingDrag_reenteringSourceHeaderResumesTabReorder()
+{
+	CDockManager Manager;
+	Manager.resize(720, 450);
+	auto First = makeDockWidget(Manager, QStringLiteral("Agent Workspace"));
+	auto Second = makeDockWidget(Manager, QStringLiteral("Second"));
+	auto Third = makeDockWidget(Manager, QStringLiteral("Third"));
+	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, First);
+	Manager.addDockWidgetTabToArea(Second, DockArea);
+	Manager.addDockWidgetTabToArea(Third, DockArea);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto FirstTab = First->tabWidget();
+	auto ThirdTab = Third->tabWidget();
+	auto TabBar = DockArea->titleBar()->tabBar();
+	QSignalSpy TabMovedSpy(TabBar, &CDockAreaTabBar::tabMoved);
+	WidgetLifecycleCounter FirstLifecycle;
+	First->installEventFilter(&FirstLifecycle);
+
+	const QPoint PressPos = FirstTab->mapToGlobal(FirstTab->rect().center());
+	sendMouseEvent(FirstTab, QEvent::MouseButtonPress, PressPos,
+		Qt::LeftButton, Qt::LeftButton);
+	QApplication::processEvents();
+	FirstLifecycle.reset();
+
+	const QPoint UndockPos = PressPos
+		+ QPoint(0, CDockManager::startDragDistance());
+	sendMouseEvent(FirstTab, QEvent::MouseMove, UndockPos,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(FirstTab->dragState(), DraggingFloatingWidget);
+
+	const QPoint HeaderPos = ThirdTab->mapToGlobal(ThirdTab->rect().center());
+	sendMouseEvent(FirstTab, QEvent::MouseMove, HeaderPos,
+		Qt::NoButton, Qt::LeftButton);
+
+	QCOMPARE(FirstTab->dragState(), DraggingTab);
+	QCOMPARE(First->dockAreaWidget(), DockArea);
+	QCOMPARE(DockArea->currentDockWidget(), First);
+	QCOMPARE(TabMovedSpy.count(), 1);
+	QCOMPARE(DockArea->dockWidget(1), First);
+	QVERIFY(!anyDockOverlayVisible(Manager));
+	QCOMPARE(FirstLifecycle.ParentChanges, 0);
+	QCOMPARE(FirstLifecycle.Shows, 0);
+	QCOMPARE(FirstLifecycle.Hides, 0);
+
+	const QPoint ContinueRight = HeaderPos + QPoint(1, 0);
+	sendMouseEvent(FirstTab, QEvent::MouseMove, ContinueRight,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(TabMovedSpy.count(), 2);
+	QCOMPARE(DockArea->dockWidget(2), First);
+	QCOMPARE(FirstLifecycle.ParentChanges, 0);
+	QCOMPARE(FirstLifecycle.Shows, 0);
+	QCOMPARE(FirstLifecycle.Hides, 0);
+
+	sendMouseEvent(FirstTab, QEvent::MouseButtonRelease, ContinueRight,
+		Qt::LeftButton, Qt::NoButton);
+	QCOMPARE(FirstTab->dragState(), DraggingInactive);
+}
+
+
+void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
+{
+	CDockManager Manager;
+	Manager.resize(900, 500);
+	auto First = makeDockWidget(Manager, QStringLiteral("Agent Workspace"));
+	auto SourceSibling = makeDockWidget(Manager, QStringLiteral("Source"));
+	auto TargetSibling = makeDockWidget(Manager, QStringLiteral("Target"));
+	auto TargetSecond = makeDockWidget(Manager, QStringLiteral("Target Two"));
+	auto SourceArea = Manager.addDockWidget(CenterDockWidgetArea, First);
+	Manager.addDockWidgetTabToArea(SourceSibling, SourceArea);
+	auto TargetArea = Manager.addDockWidget(RightDockWidgetArea,
+		TargetSibling, SourceArea);
+	Manager.addDockWidgetTabToArea(TargetSecond, TargetArea);
+	TargetArea->setCurrentDockWidget(TargetSibling);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto FirstTab = First->tabWidget();
+	auto TargetTab = TargetSibling->tabWidget();
+	auto TargetSecondTab = TargetSecond->tabWidget();
+	auto TargetTabBar = TargetArea->titleBar()->tabBar();
+	const QPoint TargetPosition = TargetTab->pos();
+	const QPoint TargetSecondPosition = TargetSecondTab->pos();
+	const int TargetViewportLeft = TargetTab->mapTo(
+		TargetTabBar->viewport(), QPoint()).x();
+	const int InsertionWidth = FirstTab->width();
+	QSignalSpy TabMovedSpy(TargetTabBar, &CDockAreaTabBar::tabMoved);
+	WidgetLifecycleCounter FirstLifecycle;
+	First->installEventFilter(&FirstLifecycle);
+
+	const QPoint PressPos = FirstTab->mapToGlobal(FirstTab->rect().center());
+	sendMouseEvent(FirstTab, QEvent::MouseButtonPress, PressPos,
+		Qt::LeftButton, Qt::LeftButton);
+	QApplication::processEvents();
+	FirstLifecycle.reset();
+	const QPoint UndockPos = PressPos
+		+ QPoint(0, CDockManager::startDragDistance());
+	sendMouseEvent(FirstTab, QEvent::MouseMove, UndockPos,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(FirstTab->dragState(), DraggingFloatingWidget);
+
+	const QPoint SourceContentPos = SourceArea->mapToGlobal(
+		SourceArea->contentAreaGeometry().center());
+	sendMouseEvent(FirstTab, QEvent::MouseMove, SourceContentPos,
+		Qt::NoButton, Qt::LeftButton);
+	QVERIFY(anyDockOverlayVisible(Manager));
+
+	const QPoint TargetHeaderPos = TargetTab->mapToGlobal(
+		QPoint(1, TargetTab->rect().center().y()));
+	sendMouseEvent(FirstTab, QEvent::MouseMove, TargetHeaderPos,
+		Qt::NoButton, Qt::LeftButton);
+	QApplication::processEvents();
+
+	// Entering a foreign header is preview-only. Neither panel area changes
+	// until release, and the large panel preview collapses to the tab ghost.
+	QCOMPARE(FirstTab->dragState(), DraggingFloatingWidget);
+	QCOMPARE(First->dockAreaWidget(), SourceArea);
+	QCOMPARE(SourceArea->currentDockWidget(), First);
+	QCOMPARE(TargetArea->currentDockWidget(), TargetSibling);
+	QCOMPARE(TargetArea->dockWidgetsCount(), 2);
+	auto Preview = Manager.findChild<CFloatingDragPreview*>();
+	QVERIFY(Preview);
+	QCOMPARE(Preview->height(), FirstTab->height());
+	QCOMPARE(Preview->width(), FirstTab->width());
+	QCOMPARE(TargetTab->pos(),
+		TargetPosition + QPoint(InsertionWidth, 0));
+	QCOMPARE(TargetSecondTab->pos(),
+		TargetSecondPosition + QPoint(InsertionWidth, 0));
+	const QRect TargetViewportRect(
+		TargetTab->mapTo(TargetTabBar->viewport(), QPoint()),
+		TargetTab->size());
+	QVERIFY(TargetViewportRect.intersects(TargetTabBar->viewport()->rect()));
+	QVERIFY(TargetViewportRect.left() > TargetViewportLeft);
+	QVERIFY(!anyDockOverlayVisible(Manager));
+	QCOMPARE(TabMovedSpy.count(), 0);
+	QCOMPARE(FirstLifecycle.ParentChanges, 0);
+	QCOMPARE(FirstLifecycle.Shows, 0);
+	QCOMPARE(FirstLifecycle.Hides, 0);
+
+	sendMouseEvent(FirstTab, QEvent::MouseButtonRelease, TargetHeaderPos,
+		Qt::LeftButton, Qt::NoButton);
+	QCOMPARE(FirstTab->dragState(), DraggingInactive);
+	QCOMPARE(First->dockAreaWidget(), TargetArea);
+	QCOMPARE(TargetArea->currentDockWidget(), First);
+	QCOMPARE(TargetArea->dockWidget(0), First);
+	QVERIFY(TargetTab->pos().x() > TargetPosition.x());
 }
 
 QTEST_MAIN(TabDragTest)

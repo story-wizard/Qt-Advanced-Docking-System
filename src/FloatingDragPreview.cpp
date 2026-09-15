@@ -16,10 +16,12 @@
 #include <QApplication>
 #include <QPainter>
 #include <QKeyEvent>
+#include <QPointer>
 
 #include "DockWidget.h"
 #include "DockWidgetTab.h"
 #include "DockAreaWidget.h"
+#include "DockAreaTabBar.h"
 #include "DockAreaTitleBar.h"
 #include "DockManager.h"
 #include "DockContainerWidget.h"
@@ -48,6 +50,12 @@ struct FloatingDragPreviewPrivate
 	QPixmap HeaderPreviewPixmap;
 	bool HeaderPreviewInOverlay = false;
 	bool Canceled = false;
+	bool TabDrag = false;
+	bool HeaderOnly = false;
+	QPointer<CDockAreaWidget> TabReorderArea;
+	int TabReorderIndex = -1;
+	int TabInsertionWidth = 0;
+	QSize ContentPreviewSize;
 
 	// Wayland hybrid drag: during the in-window phase, hit-testing and overlays
 	// are confined to this container and driven by an explicit, event-supplied
@@ -63,6 +71,68 @@ struct FloatingDragPreviewPrivate
 	QPoint cursorPos() const
 	{
 		return HasLastGlobalPos ? LastGlobalPos : QCursor::pos();
+	}
+
+	CDockAreaWidget* sourceArea() const
+	{
+		if (auto DockWidget = qobject_cast<CDockWidget*>(Content))
+		{
+			return DockWidget->dockAreaWidget();
+		}
+		return qobject_cast<CDockAreaWidget*>(Content);
+	}
+
+	void clearTabReorderPreview()
+	{
+		if (TabReorderArea)
+		{
+			TabReorderArea->titleBar()->tabBar()
+				->clearExternalTabDragPreview();
+		}
+		TabReorderArea = nullptr;
+		TabReorderIndex = -1;
+	}
+
+	void setHeaderOnly(bool Value, CDockAreaWidget* TargetArea = nullptr,
+		const QPoint& GlobalPos = QPoint())
+	{
+		if (Value && HeaderPreviewPixmap.isNull())
+		{
+			Value = false;
+		}
+		if (HeaderOnly != Value)
+		{
+			HeaderOnly = Value;
+			if (HeaderOnly)
+			{
+				const qreal PixelRatio = HeaderPreviewPixmap.devicePixelRatio();
+				_this->resize(qRound(HeaderPreviewPixmap.width() / PixelRatio),
+					qRound(HeaderPreviewPixmap.height() / PixelRatio));
+			}
+			else if (ContentPreviewSize.isValid())
+			{
+				_this->resize(ContentPreviewSize);
+			}
+			_this->update();
+		}
+
+		if (!HeaderOnly || !TargetArea)
+		{
+			return;
+		}
+
+		auto TabBar = TargetArea->titleBar()->tabBar();
+		const QPoint TargetGlobal(
+			GlobalPos.x() - DragStartMousePosition.x(),
+			TabBar->mapToGlobal(QPoint()).y());
+		if (_this->isWindow() || !_this->parentWidget())
+		{
+			_this->move(TargetGlobal);
+		}
+		else
+		{
+			_this->move(_this->parentWidget()->mapFromGlobal(TargetGlobal));
+		}
 	}
 
 
@@ -103,6 +173,7 @@ struct FloatingDragPreviewPrivate
 	void cancelDragging()
 	{
 		Canceled = true;
+		clearTabReorderPreview();
 		Q_EMIT _this->draggingCanceled();
 		DockManager->containerOverlay()->hideOverlay();
 		DockManager->dockAreaOverlay()->hideOverlay();
@@ -162,6 +233,8 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 {
 	if (!_this->isVisible() || !DockManager)
 	{
+		clearTabReorderPreview();
+		setHeaderOnly(false);
 		return;
 	}
 
@@ -169,6 +242,8 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 	auto DockAreaOverlay = DockManager->dockAreaOverlay();
 	if (!DockManager->dropOverlaysEnabled())
 	{
+		clearTabReorderPreview();
+		setHeaderOnly(false);
 		DropContainer = nullptr;
 		ContainerOverlay->hideOverlay();
 		DockAreaOverlay->hideOverlay();
@@ -218,6 +293,8 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 	DropContainer = TopContainer;
 	if (!TopContainer)
 	{
+		clearTabReorderPreview();
+		setHeaderOnly(false);
 		ContainerOverlay->hideOverlay();
 		DockAreaOverlay->hideOverlay();
 		if (CDockManager::testConfigFlag(CDockManager::DragPreviewIsDynamic))
@@ -256,6 +333,52 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 	}
 	ContainerOverlay->setAllowedAreas(AllowedContainerAreas);
 	ContainerOverlay->enableDropPreview(ContainerDropArea != InvalidDockWidgetArea);
+
+	// A tab entering a dock-area header has left panel-docking mode. Suppress
+	// both blue docking overlays and collapse to a lightweight tab-only preview.
+	// The source header resumes its real reorder gesture; a foreign header stays
+	// preview-only until release.
+	if (TabDrag && DockArea && DockArea->isVisible()
+	 && !DockArea->titleBar()->isHidden()
+	 && DockArea->titleBarGeometry().contains(
+		DockArea->mapFromGlobal(GlobalPos)))
+	{
+		auto SourceArea = sourceArea();
+
+		if (DockArea == SourceArea
+		 || DockArea->allowedAreas().testFlag(CenterDockWidgetArea))
+		{
+			auto TabBar = DockArea->titleBar()->tabBar();
+			if (TabReorderArea != DockArea)
+			{
+				clearTabReorderPreview();
+			}
+			TabReorderArea = DockArea;
+			if (DockArea == SourceArea)
+			{
+				TabReorderIndex = TabBar->tabInsertIndexAt(
+					TabBar->mapFromGlobal(GlobalPos));
+			}
+			else
+			{
+				TabReorderIndex = TabBar->previewExternalTabDrag(
+					GlobalPos.x() - DragStartMousePosition.x(),
+					TabInsertionWidth);
+			}
+			ContainerOverlay->hideOverlay();
+			DockAreaOverlay->hideOverlay();
+			setHeaderOnly(true, DockArea, GlobalPos);
+			if (CDockManager::testConfigFlag(
+				CDockManager::DragPreviewIsDynamic))
+			{
+				setHidden(false);
+			}
+			return;
+		}
+	}
+	clearTabReorderPreview();
+	setHeaderOnly(false);
+
 	if (DockArea && DockArea->isVisible() && VisibleDockAreas >= 0 && DockArea != ContentSourceArea)
 	{
 		DockAreaOverlay->enableDropPreview(true);
@@ -457,6 +580,7 @@ CFloatingDragPreview::CFloatingDragPreview(CDockAreaWidget* Content)
 //============================================================================
 CFloatingDragPreview::~CFloatingDragPreview()
 {
+	d->clearTabReorderPreview();
 	delete d;
 }
 
@@ -509,9 +633,23 @@ void CFloatingDragPreview::cancelDraggingSilently()
 {
 	// Tear down without performing a drop and without emitting draggingCanceled.
 	d->Canceled = true;
+	d->clearTabReorderPreview();
 	d->DockManager->containerOverlay()->hideOverlay();
 	d->DockManager->dockAreaOverlay()->hideOverlay();
 	close();
+}
+
+//============================================================================
+bool CFloatingDragPreview::finishDraggingToSourceTabBar()
+{
+	auto TargetArea = d->TabReorderArea;
+	if (!TargetArea || TargetArea != d->sourceArea())
+	{
+		return false;
+	}
+
+	cancelDraggingSilently();
+	return true;
 }
 
 //============================================================================
@@ -530,10 +668,21 @@ void CFloatingDragPreview::refreshDropOverlays()
 void CFloatingDragPreview::startFloating(const QPoint &DragStartMousePos,
     const QSize &Size, eDragState DragState, QWidget *MouseEventHandler)
 {
-	Q_UNUSED(MouseEventHandler)
 	Q_UNUSED(DragState)
-	resize(Size);
 	d->DragStartMousePosition = DragStartMousePos;
+	if (auto Tab = qobject_cast<CDockWidgetTab*>(MouseEventHandler))
+	{
+		d->TabDrag = true;
+		// Use the real tab width captured at mouse-down. This includes expanded
+		// Wizard subtabs, but not unrelated title-bar chrome carried by a
+		// whole-area drag ghost.
+		d->TabInsertionWidth = qMax(1,
+			Tab->dragStartTabWidth() > 0
+				? Tab->dragStartTabWidth()
+				: Tab->width());
+	}
+	d->ContentPreviewSize = Size;
+	resize(Size);
 	moveFloating();
 	show();
 	if (internal::isWayland())
@@ -553,6 +702,19 @@ void CFloatingDragPreview::finishDragging()
 	ADS_PRINT("CFloatingDragPreview::finishDragging");
 
 	const QPoint GlobalPos = d->cursorPos();
+	if (d->TabReorderArea && d->TabReorderArea != d->sourceArea())
+	{
+		auto TargetArea = d->TabReorderArea.data();
+		const int TargetIndex = d->TabReorderIndex;
+		d->clearTabReorderPreview();
+		cleanupAutoHideContainerWidget(CenterDockWidgetArea);
+		TargetArea->dockContainer()->dropWidget(d->Content,
+			CenterDockWidgetArea, TargetArea, TargetIndex);
+		close();
+		d->DockManager->containerOverlay()->hideOverlay();
+		d->DockManager->dockAreaOverlay()->hideOverlay();
+		return;
+	}
 	auto DockDropArea = d->DockManager->dockAreaOverlay()->visibleDropAreaUnderCursor(GlobalPos);
 	auto ContainerDropArea = d->DockManager->containerOverlay()->visibleDropAreaUnderCursor(GlobalPos);
 	bool ValidDropArea = (DockDropArea != InvalidDockWidgetArea)  || (ContainerDropArea != InvalidDockWidgetArea);
@@ -634,7 +796,8 @@ void CFloatingDragPreview::paintEvent(QPaintEvent* event)
 	}
 
 	QPainter painter(this);
-	if (CDockManager::testConfigFlag(CDockManager::DragPreviewShowsContentPixmap))
+	if (!d->HeaderOnly
+	 && CDockManager::testConfigFlag(CDockManager::DragPreviewShowsContentPixmap))
 	{
 		painter.save();
 		painter.setOpacity(0.28);
@@ -644,7 +807,8 @@ void CFloatingDragPreview::paintEvent(QPaintEvent* event)
 
 	// If we do not have a window frame then we paint a QRubberBand like
 	// frameless window
-	if (!CDockManager::testConfigFlag(CDockManager::DragPreviewHasWindowFrame))
+	if (!d->HeaderOnly
+	 && !CDockManager::testConfigFlag(CDockManager::DragPreviewHasWindowFrame))
 	{
 		QColor Color = palette().color(QPalette::Active, QPalette::Highlight);
 		QPen Pen = painter.pen();

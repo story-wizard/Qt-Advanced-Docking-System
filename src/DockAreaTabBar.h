@@ -128,6 +128,26 @@ public:
 	int tabInsertIndexAt(const QPoint& Pos) const;
 
 	/**
+	 * [Wizard NLE fork] Previews an external tab in the first slot without
+	 * changing the real tab or dock-widget order. Existing tabs move right around
+	 * a temporary gap. Cursor-dependent ranking is intentionally deferred until
+	 * this basic destination response is validated.
+	 */
+	int previewExternalTabDrag(int DraggedLeftGlobal, int DraggedWidth);
+
+	/**
+	 * [Wizard NLE fork] Returns the width currently reserved for an external
+	 * tab insertion preview, or zero when no preview is active.
+	 */
+	int externalTabDragPreviewWidth() const;
+
+	/**
+	 * [Wizard NLE fork] Clears an external insertion preview and seats every tab
+	 * back in its unchanged layout slot.
+	 */
+	void clearExternalTabDragPreview();
+
+	/**
 	 * Filters the tab widget events
 	 */
 	virtual bool eventFilter(QObject *watched, QEvent *event) override;
@@ -212,6 +232,13 @@ Q_SIGNALS:
 	 * from to index position to.
 	 */
 	void tabMoved(int from, int to);
+
+	/**
+	 * [Wizard NLE fork] Notifies title-bar integrations that their responsive
+	 * content budget changed for an external tab insertion preview. Width is
+	 * zero when the preview ends.
+	 */
+	void externalTabDragPreviewChanged(int width);
 
 	/**
 	 * This signal is emitted, just before the tab with the given index is
