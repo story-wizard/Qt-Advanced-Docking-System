@@ -270,6 +270,10 @@ bool DockAreaTabBarPrivate::reorderDraggedTab(CDockWidgetTab* MovingTab,
 		return false;
 	}
 
+	// A tab can be reordered before it is activated. Preserve the currently
+	// displayed tab by identity while the moving tab changes index; activating
+	// the dragged tab is reserved for a completed click or drop.
+	auto CurrentTab = _this->currentTab();
 	const QPoint DraggedPosition = MovingTab->pos();
 	TabsLayout->removeWidget(MovingTab);
 	TabsLayout->insertWidget(ToIndex, MovingTab);
@@ -278,7 +282,7 @@ bool DockAreaTabBarPrivate::reorderDraggedTab(CDockWidgetTab* MovingTab,
 	MovingTab->raise();
 	ADS_PRINT("tabMoved from " << FromIndex << " to " << ToIndex);
 	Q_EMIT _this->tabMoved(FromIndex, ToIndex);
-	_this->setCurrentIndex(ToIndex);
+	_this->setCurrentIndex(TabsLayout->indexOf(CurrentTab));
 	CurrentDragRank += DragDirection;
 	LastReorderDirection = DragDirection;
 	return true;

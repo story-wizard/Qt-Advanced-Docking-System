@@ -96,6 +96,8 @@ class TabDragTest : public QObject
 	Q_OBJECT
 
 private slots:
+	void inactiveTab_clickActivatesOnlyOnRelease();
+	void inactiveTab_reordersWithoutActivation();
 	void horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail();
 	void externalPreview_shiftsTabsWithoutChangingPanelState();
 	void externalPreview_wideSlotKeepsDestinationTabVisible();
@@ -103,6 +105,107 @@ private slots:
 	void floatingDrag_enteringAnotherHeaderPreviewsUntilRelease();
 	void floatingDrag_singleTabSourceUsesLiveTabSnapshot();
 };
+
+void TabDragTest::inactiveTab_clickActivatesOnlyOnRelease()
+{
+	CDockManager Manager;
+	Manager.resize(720, 450);
+	auto First = makeDockWidget(Manager, QStringLiteral("First"));
+	auto Second = makeDockWidget(Manager, QStringLiteral("Second"));
+	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, First);
+	Manager.addDockWidgetTabToArea(Second, DockArea);
+	DockArea->setCurrentDockWidget(First);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto SecondTab = Second->tabWidget();
+	QSignalSpy ClickedSpy(SecondTab, &CDockWidgetTab::clicked);
+	QSignalSpy CurrentChangingSpy(DockArea,
+		&CDockAreaWidget::currentChanging);
+	QSignalSpy CurrentChangedSpy(DockArea,
+		&CDockAreaWidget::currentChanged);
+	const QPoint PressPos = SecondTab->mapToGlobal(
+		SecondTab->rect().center());
+
+	sendMouseEvent(SecondTab, QEvent::MouseButtonPress, PressPos,
+		Qt::LeftButton, Qt::LeftButton);
+	QApplication::processEvents();
+
+	QCOMPARE(ClickedSpy.count(), 0);
+	QCOMPARE(CurrentChangingSpy.count(), 0);
+	QCOMPARE(CurrentChangedSpy.count(), 0);
+	QCOMPARE(DockArea->currentDockWidget(), First);
+	QVERIFY(!SecondTab->isActiveTab());
+
+	sendMouseEvent(SecondTab, QEvent::MouseButtonRelease, PressPos,
+		Qt::LeftButton, Qt::NoButton);
+	QApplication::processEvents();
+
+	QCOMPARE(ClickedSpy.count(), 1);
+	QCOMPARE(CurrentChangingSpy.count(), 1);
+	QCOMPARE(CurrentChangedSpy.count(), 1);
+	QCOMPARE(DockArea->currentDockWidget(), Second);
+	QVERIFY(SecondTab->isActiveTab());
+}
+
+
+void TabDragTest::inactiveTab_reordersWithoutActivation()
+{
+	CDockManager Manager;
+	Manager.resize(720, 450);
+	auto First = makeDockWidget(Manager, QStringLiteral("First"));
+	auto Second = makeDockWidget(Manager, QStringLiteral("Second"));
+	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, First);
+	Manager.addDockWidgetTabToArea(Second, DockArea);
+	DockArea->setCurrentDockWidget(First);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto FirstTab = First->tabWidget();
+	auto SecondTab = Second->tabWidget();
+	auto TabBar = DockArea->titleBar()->tabBar();
+	QSignalSpy ClickedSpy(SecondTab, &CDockWidgetTab::clicked);
+	QSignalSpy TabMovedSpy(TabBar, &CDockAreaTabBar::tabMoved);
+	QSignalSpy CurrentChangingSpy(DockArea,
+		&CDockAreaWidget::currentChanging);
+	QSignalSpy CurrentChangedSpy(DockArea,
+		&CDockAreaWidget::currentChanged);
+
+	const QPoint PressPos = SecondTab->mapToGlobal(
+		SecondTab->rect().center());
+	const int DragStartLeft = SecondTab->pos().x();
+	const int RequiredOverlap = qMax(1, (FirstTab->width() + 2) / 3);
+	const int ReorderBoundary = FirstTab->geometry().right()
+		- RequiredOverlap + 1;
+	const QPoint ReorderPos(
+		PressPos.x() + ReorderBoundary - DragStartLeft - 1,
+		PressPos.y());
+
+	sendMouseEvent(SecondTab, QEvent::MouseButtonPress, PressPos,
+		Qt::LeftButton, Qt::LeftButton);
+	sendMouseEvent(SecondTab, QEvent::MouseMove, ReorderPos,
+		Qt::NoButton, Qt::LeftButton);
+	QApplication::processEvents();
+
+	QCOMPARE(SecondTab->dragState(), DraggingTab);
+	QCOMPARE(ClickedSpy.count(), 0);
+	QCOMPARE(TabMovedSpy.count(), 1);
+	QCOMPARE(DockArea->dockWidget(0), Second);
+	QCOMPARE(DockArea->dockWidget(1), First);
+	QCOMPARE(DockArea->currentDockWidget(), First);
+	QCOMPARE(TabBar->currentTab(), FirstTab);
+	QCOMPARE(CurrentChangingSpy.count(), 0);
+	QCOMPARE(CurrentChangedSpy.count(), 0);
+
+	sendMouseEvent(SecondTab, QEvent::MouseButtonRelease, ReorderPos,
+		Qt::LeftButton, Qt::NoButton);
+	QApplication::processEvents();
+
+	QCOMPARE(SecondTab->dragState(), DraggingInactive);
+	QCOMPARE(ClickedSpy.count(), 0);
+	QCOMPARE(DockArea->currentDockWidget(), First);
+	QCOMPARE(TabBar->currentTab(), FirstTab);
+}
 
 void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
 {
@@ -115,6 +218,7 @@ void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
 	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, First);
 	Manager.addDockWidgetTabToArea(Second, DockArea);
 	Manager.addDockWidgetTabToArea(Third, DockArea);
+	DockArea->setCurrentDockWidget(First);
 	Manager.show();
 	QApplication::processEvents();
 
@@ -405,6 +509,7 @@ void TabDragTest::floatingDrag_reenteringSourceHeaderResumesTabReorder()
 	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, First);
 	Manager.addDockWidgetTabToArea(Second, DockArea);
 	Manager.addDockWidgetTabToArea(Third, DockArea);
+	DockArea->setCurrentDockWidget(First);
 	Manager.show();
 	QApplication::processEvents();
 
@@ -466,6 +571,7 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	auto TargetSecond = makeDockWidget(Manager, QStringLiteral("Target Two"));
 	auto SourceArea = Manager.addDockWidget(CenterDockWidgetArea, First);
 	Manager.addDockWidgetTabToArea(SourceSibling, SourceArea);
+	SourceArea->setCurrentDockWidget(SourceSibling);
 	auto TargetArea = Manager.addDockWidget(RightDockWidgetArea,
 		TargetSibling, SourceArea);
 	Manager.addDockWidgetTabToArea(TargetSecond, TargetArea);
@@ -513,7 +619,7 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	// until release, and the large panel preview collapses to the tab ghost.
 	QCOMPARE(FirstTab->dragState(), DraggingFloatingWidget);
 	QCOMPARE(First->dockAreaWidget(), SourceArea);
-	QCOMPARE(SourceArea->currentDockWidget(), First);
+	QCOMPARE(SourceArea->currentDockWidget(), SourceSibling);
 	QCOMPARE(TargetArea->currentDockWidget(), TargetSibling);
 	QCOMPARE(TargetArea->dockWidgetsCount(), 2);
 	auto Preview = Manager.findChild<CFloatingDragPreview*>();
@@ -602,8 +708,9 @@ void TabDragTest::floatingDrag_singleTabSourceUsesLiveTabSnapshot()
 	sendMouseEvent(SourceTab, QEvent::MouseButtonPress, PressPos,
 		Qt::LeftButton, Qt::LeftButton);
 
-	// Models a Wizard tab becoming active and exposing its expanded subtab
-	// section after mouse-down but before the vertical detach threshold.
+	// Models a Wizard tab exposing an expanded subtab section after mouse-down
+	// but before the vertical detach threshold. The drag snapshot must use the
+	// live presentation even though mouse-down no longer activates the panel.
 	const int ExpandedTabWidth = 260;
 	SourceTab->setFixedWidth(ExpandedTabWidth);
 	if (SourceTab->parentWidget() && SourceTab->parentWidget()->layout())

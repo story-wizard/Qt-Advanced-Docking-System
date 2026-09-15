@@ -521,7 +521,6 @@ void CDockWidgetTab::mousePressEvent(QMouseEvent* ev)
         	d->focusController()->setDockWidgetTabPressed(true);
         	d->focusController()->setDockWidgetTabFocused(this);
         }
-        Q_EMIT clicked();
 		return;
 	}
 	Super::mousePressEvent(ev);
@@ -541,6 +540,18 @@ void CDockWidgetTab::mouseReleaseEvent(QMouseEvent* ev)
 
 		switch (CurrentDragState)
 		{
+		case DraggingMousePressed:
+			// Treat the gesture as a click only if it never crossed a drag
+			// threshold and was released over this tab. This keeps grabbing an
+			// inactive tab for reordering or detachment from activating its
+			// potentially expensive panel content on mouse-down.
+			if (rect().contains(mapFromGlobal(internal::globalPositionOf(ev))))
+			{
+				ev->accept();
+				Q_EMIT clicked();
+			}
+			break;
+
 		case DraggingTab:
 			// End of tab moving, emit signal
 			if (d->DockArea)
