@@ -8,17 +8,59 @@
 
 #include <QtTest/QtTest>
 
+#include <QLabel>
+
+#include "DockAreaTitleBar.h"
+#include "DockAreaWidget.h"
+#include "DockContainerWidget.h"
 #include "DockManager.h"
 #include "DockOverlay.h"
+#include "DockWidget.h"
+#include "FloatingDockContainer.h"
 #include "ads_globals.h"
 
-using ads::CDockManager;
+using namespace ads;
+
+namespace
+{
+
+CDockWidget* makeDockWidget(CDockManager& Manager, const QString& Title)
+{
+	auto DockWidget = Manager.createDockWidget(Title);
+	DockWidget->setWidget(new QLabel(Title));
+	return DockWidget;
+}
+
+class ConfigRestorer
+{
+public:
+	ConfigRestorer()
+		: Flags(CDockManager::configFlags())
+		, EdgeMargin(CDockManager::halfPanelContainerEdgeMargin())
+	{
+	}
+
+	~ConfigRestorer()
+	{
+		CDockManager::setConfigFlags(Flags);
+		CDockManager::setHalfPanelContainerEdgeMargin(EdgeMargin);
+	}
+
+private:
+	CDockManager::ConfigFlags Flags;
+	int EdgeMargin;
+};
+
+}
 
 class TestDockManager : public CDockManager
 {
 public:
 	using CDockManager::containerOverlay;
 	using CDockManager::dockAreaOverlay;
+	using CDockContainerWidget::dockAreaHeaderHasDropPriority;
+	using CDockContainerWidget::dropFloatingWidget;
+	using CDockContainerWidget::showDropOverlays;
 };
 
 class OverlayGateTest : public QObject
@@ -32,6 +74,8 @@ private slots:
 	void setDropOverlaysEnabled_roundtrips();
 	void setDropOverlaysEnabled_equalValueIsNoOp();
 	void setDropOverlaysEnabled_falseHidesBothOverlays();
+	void topHeader_beatsForgivingContainerEdgeOnPreviewAndDrop();
+	void topHeader_doesNotBeatExplicitContainerIndicator();
 	void dragCancelEvent_isRegisteredAndDistinct();
 };
 
@@ -93,6 +137,79 @@ void OverlayGateTest::setDropOverlaysEnabled_falseHidesBothOverlays()
 
 	QVERIFY(manager.containerOverlay()->isHidden());
 	QVERIFY(manager.dockAreaOverlay()->isHidden());
+}
+
+void OverlayGateTest::topHeader_beatsForgivingContainerEdgeOnPreviewAndDrop()
+{
+	ConfigRestorer RestoreConfig;
+	CDockManager::setConfigFlag(CDockManager::HalfPanelDropZones, true);
+	CDockManager::setHalfPanelContainerEdgeMargin(24);
+
+	TestDockManager Manager;
+	Manager.resize(900, 500);
+	auto Left = makeDockWidget(Manager, QStringLiteral("Left"));
+	auto Target = makeDockWidget(Manager, QStringLiteral("Target"));
+	auto TargetSecond = makeDockWidget(Manager,
+		QStringLiteral("Target second tab"));
+	auto Source = makeDockWidget(Manager, QStringLiteral("Floating source"));
+	auto LeftArea = Manager.addDockWidget(CenterDockWidgetArea, Left);
+	auto TargetArea = Manager.addDockWidget(RightDockWidgetArea, Target,
+		LeftArea);
+	Manager.addDockWidgetTabToArea(TargetSecond, TargetArea);
+	Manager.addDockWidget(BottomDockWidgetArea, Source, LeftArea);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto Floating = new CFloatingDockContainer(Source);
+	Floating->show();
+	QApplication::processEvents();
+	QCOMPARE(Manager.visibleDockAreaCount(), 2);
+
+	const QPoint HeaderPos = TargetArea->titleBar()->mapToGlobal(
+		TargetArea->titleBar()->rect().center());
+	QVERIFY(TargetArea->titleBarGeometry().contains(
+		TargetArea->mapFromGlobal(HeaderPos)));
+	QVERIFY(Manager.mapFromGlobal(HeaderPos).y()
+		< CDockManager::halfPanelContainerEdgeMargin());
+
+	Manager.containerOverlay()->setAllowedAreas(OuterDockAreas);
+	QCOMPARE(Manager.containerOverlay()->showOverlay(&Manager, HeaderPos),
+		TopDockWidgetArea);
+	QCOMPARE(Manager.containerOverlay()->dropIndicatorAreaUnderCursor(
+		HeaderPos), InvalidDockWidgetArea);
+
+	TestDockManager::showDropOverlays(&Manager, &Manager, HeaderPos, false);
+	QCOMPARE(Manager.dockAreaOverlay()->visibleDropAreaUnderCursor(HeaderPos),
+		CenterDockWidgetArea);
+	QCOMPARE(Manager.containerOverlay()->visibleDropAreaUnderCursor(HeaderPos),
+		InvalidDockWidgetArea);
+
+	const int TargetTabCount = TargetArea->dockWidgets().size();
+	Manager.dropFloatingWidget(Floating, HeaderPos);
+	QApplication::processEvents();
+
+	QCOMPARE(Source->dockAreaWidget(), TargetArea);
+	QCOMPARE(TargetArea->dockWidgets().size(), TargetTabCount + 1);
+	QCOMPARE(Manager.visibleDockAreaCount(), 2);
+}
+
+void OverlayGateTest::topHeader_doesNotBeatExplicitContainerIndicator()
+{
+	TestDockManager Manager;
+	Manager.resize(600, 400);
+	auto Target = makeDockWidget(Manager, QStringLiteral("Target"));
+	auto TargetArea = Manager.addDockWidget(CenterDockWidgetArea, Target);
+	Manager.show();
+	QApplication::processEvents();
+
+	const QPoint HeaderPos = TargetArea->titleBar()->mapToGlobal(
+		TargetArea->titleBar()->rect().center());
+	QVERIFY(TestDockManager::dockAreaHeaderHasDropPriority(TargetArea,
+		HeaderPos, CenterDockWidgetArea, TopDockWidgetArea,
+		InvalidDockWidgetArea));
+	QVERIFY(!TestDockManager::dockAreaHeaderHasDropPriority(TargetArea,
+		HeaderPos, CenterDockWidgetArea, TopDockWidgetArea,
+		TopDockWidgetArea));
 }
 
 void OverlayGateTest::dragCancelEvent_isRegisteredAndDistinct()

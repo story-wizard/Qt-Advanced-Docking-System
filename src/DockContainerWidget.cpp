@@ -577,16 +577,26 @@ void CDockContainerWidget::showDropOverlays(CDockManager* DockManager,
 	if (DockArea && DockArea->isVisible() && VisibleDockAreas > 0)
 	{
 		DockAreaOverlay->enableDropPreview(true);
-		DockAreaOverlay->setAllowedAreas(
-		    (VisibleDockAreas == 1) ? NoDockWidgetArea : DockArea->allowedAreas());
+		DockWidgetAreas AllowedDockAreas = DockArea->allowedAreas();
+		if (VisibleDockAreas == 1)
+		{
+			AllowedDockAreas = dockAreaHeaderAcceptsDrop(DockArea, GlobalPos)
+				? DockWidgetAreas(CenterDockWidgetArea)
+				: NoDockWidgetArea;
+		}
+		DockAreaOverlay->setAllowedAreas(AllowedDockAreas);
 		DockWidgetArea Area = DockAreaOverlay->showOverlay(DockArea, GlobalPos);
+		const bool HeaderHasPriority = dockAreaHeaderHasDropPriority(
+			DockArea, GlobalPos, Area, ContainerArea,
+			ContainerOverlay->dropIndicatorAreaUnderCursor(GlobalPos));
 
 		// A CenterDockWidgetArea for the dockAreaOverlay() indicates that
-		// the mouse is in the title bar. If the ContainerArea is valid
-		// then we ignore the dock area of the dockAreaOverlay() and disable
-		// the drop preview
+		// the mouse is in the title bar. A forgiving container edge target
+		// yields to that header, while an explicitly hovered container glyph
+		// keeps the existing container-level behavior.
 		if ((Area == CenterDockWidgetArea)
-		    && (ContainerArea != InvalidDockWidgetArea))
+		    && (ContainerArea != InvalidDockWidgetArea)
+		    && !HeaderHasPriority)
 		{
 			DockAreaOverlay->enableDropPreview(false);
 			ContainerOverlay->enableDropPreview(true);
@@ -600,6 +610,46 @@ void CDockContainerWidget::showDropOverlays(CDockManager* DockManager,
 	{
 		DockAreaOverlay->hideOverlay();
 	}
+}
+
+
+//============================================================================
+bool CDockContainerWidget::dockAreaHeaderAcceptsDrop(
+	CDockAreaWidget* DockArea, const QPoint& GlobalPos)
+{
+	return DockArea
+		&& DockArea->isVisible()
+		&& DockArea->allowedAreas().testFlag(CenterDockWidgetArea)
+		&& !DockArea->titleBar()->isHidden()
+		&& DockArea->titleBarGeometry().contains(
+			DockArea->mapFromGlobal(GlobalPos));
+}
+
+
+//============================================================================
+bool CDockContainerWidget::dockAreaHeaderHasDropPriority(
+	CDockAreaWidget* DockArea, const QPoint& GlobalPos,
+	DockWidgetArea DockAreaDropArea, DockWidgetArea ContainerDropArea,
+	DockWidgetArea ContainerIndicatorArea)
+{
+	if (DockAreaDropArea != CenterDockWidgetArea
+	 || !dockAreaHeaderAcceptsDrop(DockArea, GlobalPos))
+	{
+		return false;
+	}
+
+	switch (ContainerDropArea)
+	{
+	case LeftDockWidgetArea:
+	case RightDockWidgetArea:
+	case TopDockWidgetArea:
+	case BottomDockWidgetArea:
+		break;
+	default:
+		return false;
+	}
+
+	return ContainerIndicatorArea == InvalidDockWidgetArea;
 }
 
 
@@ -1926,7 +1976,10 @@ void CDockContainerWidget::dropFloatingWidget(CFloatingDockContainer* FloatingWi
 		dropOverlay->setAllowedAreas(DockArea->allowedAreas());
 		dropArea = dropOverlay->showOverlay(DockArea, TargetPos);
 		if (ContainerDropArea != InvalidDockWidgetArea &&
-			ContainerDropArea != dropArea)
+			ContainerDropArea != dropArea &&
+			!dockAreaHeaderHasDropPriority(DockArea, TargetPos, dropArea,
+				ContainerDropArea, d->DockManager->containerOverlay()
+					->dropIndicatorAreaUnderCursor(TargetPos)))
 		{
 			dropArea = InvalidDockWidgetArea;
 		}

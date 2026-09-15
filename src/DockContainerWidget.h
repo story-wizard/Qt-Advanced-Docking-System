@@ -144,6 +144,24 @@ protected:
 		bool ContentPinnable);
 
 	/**
+	 * Returns true when the cursor is over a dock area's visible tab header and
+	 * that area accepts tabified drops.
+	 */
+	static bool dockAreaHeaderAcceptsDrop(CDockAreaWidget* DockArea,
+		const QPoint& GlobalPos);
+
+	/**
+	 * Gives a dock-area header priority over a container edge only when the
+	 * container edge was selected by the forgiving fallback. An explicitly
+	 * hovered container glyph retains priority.
+	 */
+	static bool dockAreaHeaderHasDropPriority(CDockAreaWidget* DockArea,
+		const QPoint& GlobalPos,
+		DockWidgetArea DockAreaDropArea,
+		DockWidgetArea ContainerDropArea,
+		DockWidgetArea ContainerIndicatorArea);
+
+	/**
 	 * Access function for the internal root splitter
 	 */
 	CDockSplitter* rootSplitter() const;

@@ -107,6 +107,21 @@ public:
 	DockWidgetArea dropAreaUnderCursor(const QPoint& GlobalPos) const;
 
 	/**
+	 * Returns only the explicit drop-indicator area under the current cursor.
+	 * Unlike dropAreaUnderCursor(), this does not include forgiving edge or
+	 * quadrant fall-through targets.
+	 */
+	DockWidgetArea dropIndicatorAreaUnderCursor() const;
+
+	/**
+	 * Returns only the explicit drop-indicator area under the given global
+	 * position. This lets callers distinguish an intentional glyph hit from a
+	 * forgiving fallback target.
+	 */
+	DockWidgetArea dropIndicatorAreaUnderCursor(
+		const QPoint& GlobalPos) const;
+
+	/**
 	 * If the drop area is the CenterDockWidgetArea or a sidebar area,
 	 * then this function returns the index of the tab under cursor.
 	 * Call this function after call to dropAreaUnderCursor() because this

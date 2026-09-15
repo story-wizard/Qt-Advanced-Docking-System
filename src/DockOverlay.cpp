@@ -516,6 +516,26 @@ DockWidgetAreas CDockOverlay::allowedAreas() const
 
 
 //============================================================================
+DockWidgetArea CDockOverlay::dropIndicatorAreaUnderCursor() const
+{
+	return dropIndicatorAreaUnderCursor(QCursor::pos());
+}
+
+
+//============================================================================
+DockWidgetArea CDockOverlay::dropIndicatorAreaUnderCursor(
+	const QPoint& GlobalPos) const
+{
+	if (!d->TargetWidget)
+	{
+		return InvalidDockWidgetArea;
+	}
+
+	return d->Cross->cursorLocation(GlobalPos);
+}
+
+
+//============================================================================
 DockWidgetArea CDockOverlay::dropAreaUnderCursor() const
 {
 	return dropAreaUnderCursor(QCursor::pos());
@@ -531,7 +551,7 @@ DockWidgetArea CDockOverlay::dropAreaUnderCursor(const QPoint& GlobalPos) const
 		return InvalidDockWidgetArea;
 	}
 
-	DockWidgetArea Result = d->Cross->cursorLocation(GlobalPos);
+	DockWidgetArea Result = dropIndicatorAreaUnderCursor(GlobalPos);
 	if (Result != InvalidDockWidgetArea)
 	{
 		return Result;
@@ -906,6 +926,10 @@ bool CDockOverlay::setDragPreviewHeader(const QPixmap& Pixmap,
 void CDockOverlay::enableDropPreview(bool Enable)
 {
 	d->DropPreviewEnabled = Enable;
+	if (!Enable)
+	{
+		d->DropAreaRect = QRect();
+	}
 	update();
 }
 

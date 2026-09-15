@@ -551,18 +551,23 @@ void FloatingDockContainerPrivate::titleMouseReleaseEvent()
 	// DockManager will be unlinked from this within DropContainer->dropFloatingWidget
 	const auto OriginalDockManager = this->DockManager.data();
 
-	if (DockManager->dockAreaOverlay()->dropAreaUnderCursor() != InvalidDockWidgetArea
-	 || DockManager->containerOverlay()->dropAreaUnderCursor() != InvalidDockWidgetArea)
+	auto DockAreaOverlay = DockManager->dockAreaOverlay();
+	auto ContainerOverlay = DockManager->containerOverlay();
+	const auto DockDropArea = DockAreaOverlay->visibleDropAreaUnderCursor();
+	const auto ContainerDropArea =
+		ContainerOverlay->visibleDropAreaUnderCursor();
+	if (DockDropArea != InvalidDockWidgetArea
+	 || ContainerDropArea != InvalidDockWidgetArea)
 	{
-		CDockOverlay *Overlay = DockManager->containerOverlay();
-		if (!Overlay->dropOverlayRect().isValid())
-		{
-			Overlay = DockManager->dockAreaOverlay();
-		}
+		CDockOverlay *Overlay = ContainerDropArea != InvalidDockWidgetArea
+			? ContainerOverlay : DockAreaOverlay;
+		const DockWidgetArea ResolvedDropArea =
+			ContainerDropArea != InvalidDockWidgetArea
+				? ContainerDropArea : DockDropArea;
 
 		// Do not resize if we drop into an autohide sidebar area to preserve
 		// the dock area size for the initial size of the auto hide area
-		if (!ads::internal::isSideBarArea(Overlay->dropAreaUnderCursor()))
+		if (!ads::internal::isSideBarArea(ResolvedDropArea))
 		{
 			// Resize the floating widget to the size of the highlighted drop area
 			// rectangle

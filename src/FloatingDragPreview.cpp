@@ -312,9 +312,6 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 		return;
 	}
 
-	auto DockDropArea = DockAreaOverlay->dropAreaUnderCursor(GlobalPos);
-	auto ContainerDropArea = ContainerOverlay->dropAreaUnderCursor(GlobalPos);
-
 	int VisibleDockAreas = TopContainer->visibleDockAreaCount();
 
 	// Include the overlay widget we're dragging as a visible widget
@@ -340,16 +337,21 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 		AllowedContainerAreas |= AutoHideDockAreas;
 	}
 	ContainerOverlay->setAllowedAreas(AllowedContainerAreas);
-	ContainerOverlay->enableDropPreview(ContainerDropArea != InvalidDockWidgetArea);
+	auto ContainerDropArea = InvalidDockWidgetArea;
+	auto DockDropArea = InvalidDockWidgetArea;
 
 	// A tab entering a dock-area header has left panel-docking mode. Suppress
 	// both blue docking overlays and collapse to a lightweight tab-only preview.
 	// The source header resumes its real reorder gesture; a foreign header stays
-	// preview-only until release.
+	// preview-only until release. Check the already-visible container glyph
+	// before taking this fast path so an explicit glyph hit keeps priority,
+	// without showing and immediately hiding overlays on every header move.
 	if (TabDrag && DockArea && DockArea->isVisible()
 	 && !DockArea->titleBar()->isHidden()
 	 && DockArea->titleBarGeometry().contains(
-		DockArea->mapFromGlobal(GlobalPos)))
+		DockArea->mapFromGlobal(GlobalPos))
+	 && ContainerOverlay->dropIndicatorAreaUnderCursor(GlobalPos)
+		== InvalidDockWidgetArea)
 	{
 		auto SourceArea = sourceArea();
 
@@ -386,27 +388,44 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 	}
 	clearTabReorderPreview();
 	setHeaderOnly(false);
+	ContainerDropArea = ContainerOverlay->showOverlay(
+		TopContainer, GlobalPos);
+	ContainerOverlay->enableDropPreview(
+		ContainerDropArea != InvalidDockWidgetArea);
 
 	if (DockArea && DockArea->isVisible() && VisibleDockAreas >= 0 && DockArea != ContentSourceArea)
 	{
 		DockAreaOverlay->enableDropPreview(true);
-		DockAreaOverlay->setAllowedAreas( (VisibleDockAreas == 1) ? NoDockWidgetArea : DockArea->allowedAreas());
-		DockWidgetArea Area = DockAreaOverlay->showOverlay(DockArea, GlobalPos);
+		DockWidgetAreas AllowedDockAreas = DockArea->allowedAreas();
+		if (VisibleDockAreas == 1)
+		{
+			AllowedDockAreas = CDockContainerWidget::dockAreaHeaderAcceptsDrop(
+				DockArea, GlobalPos)
+				? DockWidgetAreas(CenterDockWidgetArea)
+				: NoDockWidgetArea;
+		}
+		DockAreaOverlay->setAllowedAreas(AllowedDockAreas);
+		DockDropArea = DockAreaOverlay->showOverlay(DockArea, GlobalPos);
+		const bool HeaderHasPriority =
+			CDockContainerWidget::dockAreaHeaderHasDropPriority(
+				DockArea, GlobalPos, DockDropArea, ContainerDropArea,
+				ContainerOverlay->dropIndicatorAreaUnderCursor(GlobalPos));
 
 		// A CenterDockWidgetArea for the dockAreaOverlay() indicates that
-		// the mouse is in the title bar. If the ContainerArea is valid
-		// then we ignore the dock area of the dockAreaOverlay() and disable
-		// the drop preview
-		if ((Area == CenterDockWidgetArea) && (ContainerDropArea != InvalidDockWidgetArea))
+		// the mouse is in the title bar. The header beats only a forgiving
+		// container-edge result, not an explicitly hovered glyph.
+		if ((DockDropArea == CenterDockWidgetArea)
+		 && (ContainerDropArea != InvalidDockWidgetArea)
+		 && !HeaderHasPriority)
 		{
 			DockAreaOverlay->enableDropPreview(false);
 			ContainerOverlay->enableDropPreview(true);
 		}
 		else
 		{
-			ContainerOverlay->enableDropPreview(InvalidDockWidgetArea == Area);
+			ContainerOverlay->enableDropPreview(
+				InvalidDockWidgetArea == DockDropArea);
 		}
-		ContainerOverlay->showOverlay(TopContainer, GlobalPos);
 	}
 	else
 	{
@@ -418,8 +437,11 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 		if (VisibleDockAreas == 1)
 		{
 			ContainerOverlay->setAllowedAreas(AutoHideDockAreas);
+			ContainerDropArea = ContainerOverlay->showOverlay(
+				TopContainer, GlobalPos);
+			ContainerOverlay->enableDropPreview(
+				ContainerDropArea != InvalidDockWidgetArea);
 		}
-		ContainerOverlay->showOverlay(TopContainer, GlobalPos);
 
 
 		if (DockArea == ContentSourceArea && InvalidDockWidgetArea == ContainerDropArea)
