@@ -111,6 +111,26 @@ struct DockWidgetTabPrivate
 	bool startFloating(eDragState DraggingState = DraggingFloatingWidget);
 
 	/**
+	 * Returns the visible source panel size for a tab detached from a
+	 * multi-tab area. Inactive dock widgets are removed from the area layout,
+	 * so their own size may still be a construction default or a geometry from
+	 * the last time they were active.
+	 */
+	QSize dockWidgetDragPreviewSize() const
+	{
+		if (DockArea)
+		{
+			const QSize ContentAreaSize =
+				DockArea->contentAreaGeometry().size();
+			if (!ContentAreaSize.isEmpty())
+			{
+				return ContentAreaSize;
+			}
+		}
+		return DockWidget ? DockWidget->size() : QSize();
+	}
+
+	/**
 	 * Wayland hybrid drag: drive the in-window drag preview from reliable
 	 * event coordinates and, when the cursor leaves the source top-level
 	 * window, convert the in-window drag into a native compositor platform
@@ -367,7 +387,7 @@ bool DockWidgetTabPrivate::startFloating(eDragState DraggingState)
 	if (DockArea->dockWidgetsCount() > 1)
 	{
 		FloatingWidget = createFloatingWidget(DockWidget, CreateContainer);
-		Size = DockWidget->size();
+		Size = dockWidgetDragPreviewSize();
 	}
 	else
 	{
@@ -427,7 +447,7 @@ void DockWidgetTabPrivate::waylandPreviewMove(QMouseEvent* ev)
 	if (DockArea->dockWidgetsCount() > 1)
 	{
 		RealFloating = createFloatingWidget(DockWidget, true);
-		Size = DockWidget->size();
+		Size = dockWidgetDragPreviewSize();
 	}
 	else
 	{

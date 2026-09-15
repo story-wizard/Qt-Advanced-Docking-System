@@ -115,6 +115,7 @@ private slots:
 	void floatingDrag_reenteringSourceHeaderResumesTabReorder();
 	void floatingDrag_enteringAnotherHeaderPreviewsUntilRelease();
 	void floatingDrag_singleTabSourceUsesLiveTabSnapshot();
+	void floatingDrag_inactiveTabUsesVisibleSourceAreaSize();
 };
 
 void TabDragTest::inactiveTab_clickActivatesOnlyOnRelease()
@@ -756,6 +757,53 @@ void TabDragTest::floatingDrag_singleTabSourceUsesLiveTabSnapshot()
 	QCOMPARE(TargetSecondTab->pos(),
 		TargetSecondPosition + QPoint(ExpandedTabWidth, 0));
 
+	sendMouseEvent(SourceTab, QEvent::MouseButtonRelease, TargetHeaderPos,
+		Qt::LeftButton, Qt::NoButton);
+}
+
+
+void TabDragTest::floatingDrag_inactiveTabUsesVisibleSourceAreaSize()
+{
+	CDockManager Manager;
+	Manager.resize(1000, 500);
+	auto Active = makeDockWidget(Manager, QStringLiteral("Active"));
+	auto Source = makeDockWidget(Manager, QStringLiteral("Render Graph"));
+	auto Target = makeDockWidget(Manager, QStringLiteral("Target"));
+	auto SourceArea = Manager.addDockWidget(CenterDockWidgetArea, Active);
+	Manager.addDockWidgetTabToArea(Source, SourceArea);
+	SourceArea->setCurrentDockWidget(Active);
+	auto TargetArea = Manager.addDockWidget(RightDockWidgetArea,
+		Target, SourceArea);
+	Manager.show();
+	QApplication::processEvents();
+
+	// An inactive dock widget can carry a construction default or the geometry
+	// from its last activation because QtADS removes it from the area layout.
+	// The panel silhouette must instead represent the visible source slot.
+	Source->resize(80, 60);
+	const QSize SourceAreaSize = SourceArea->contentAreaGeometry().size();
+	QVERIFY(!SourceAreaSize.isEmpty());
+	QVERIFY(SourceAreaSize != Source->size());
+
+	auto SourceTab = Source->tabWidget();
+	const QPoint PressPos = SourceTab->mapToGlobal(
+		SourceTab->rect().center());
+	sendMouseEvent(SourceTab, QEvent::MouseButtonPress, PressPos,
+		Qt::LeftButton, Qt::LeftButton);
+	const QPoint UndockPos = PressPos
+		+ QPoint(0, CDockManager::startDragDistance());
+	sendMouseEvent(SourceTab, QEvent::MouseMove, UndockPos,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(SourceTab->dragState(), DraggingFloatingWidget);
+
+	auto Preview = Manager.findChild<CFloatingDragPreview*>();
+	QVERIFY(Preview);
+	QCOMPARE(Preview->size(), SourceAreaSize);
+
+	const QPoint TargetHeaderPos = TargetArea->titleBar()->mapToGlobal(
+		TargetArea->titleBar()->rect().center());
+	sendMouseEvent(SourceTab, QEvent::MouseMove, TargetHeaderPos,
+		Qt::NoButton, Qt::LeftButton);
 	sendMouseEvent(SourceTab, QEvent::MouseButtonRelease, TargetHeaderPos,
 		Qt::LeftButton, Qt::NoButton);
 }
