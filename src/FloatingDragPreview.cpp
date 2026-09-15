@@ -681,13 +681,23 @@ void CFloatingDragPreview::startFloating(const QPoint &DragStartMousePos,
 	if (auto Tab = qobject_cast<CDockWidgetTab*>(MouseEventHandler))
 	{
 		d->TabDrag = true;
-		// Use the real tab width captured at mouse-down. This includes expanded
-		// Wizard subtabs, but not unrelated title-bar chrome carried by a
-		// whole-area drag ghost.
-		d->TabInsertionWidth = qMax(1,
-			Tab->dragStartTabWidth() > 0
-				? Tab->dragStartTabWidth()
-				: Tab->width());
+		// A single-tab dock is moved internally as a whole area, but its drag
+		// identity is still the tab the user grabbed. Snapshot that exact tab at
+		// detachment so the ghost never includes unrelated title-bar chrome.
+		// The same live width drives the destination gap, including any expanded
+		// presentation that appeared when mouse-down activated the tab.
+		const QPixmap TabPreview = Tab->grab();
+		if (!TabPreview.isNull())
+		{
+			d->HeaderPreviewPixmap = TabPreview;
+			const qreal PixelRatio = TabPreview.devicePixelRatio();
+			d->TabInsertionWidth = qMax(1,
+				qRound(TabPreview.width() / PixelRatio));
+		}
+		else
+		{
+			d->TabInsertionWidth = qMax(1, Tab->width());
+		}
 	}
 	d->ContentPreviewSize = Size;
 	resize(Size);

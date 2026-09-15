@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <QLabel>
+#include <QLayout>
 #include <QMouseEvent>
 #include <QScrollBar>
 #include <QSignalSpy>
@@ -100,6 +101,7 @@ private slots:
 	void externalPreview_wideSlotKeepsDestinationTabVisible();
 	void floatingDrag_reenteringSourceHeaderResumesTabReorder();
 	void floatingDrag_enteringAnotherHeaderPreviewsUntilRelease();
+	void floatingDrag_singleTabSourceUsesLiveTabSnapshot();
 };
 
 void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
@@ -479,7 +481,6 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	const QPoint TargetSecondPosition = TargetSecondTab->pos();
 	const int TargetViewportLeft = TargetTab->mapTo(
 		TargetTabBar->viewport(), QPoint()).x();
-	const int InsertionWidth = FirstTab->width();
 	QSignalSpy TabMovedSpy(TargetTabBar, &CDockAreaTabBar::tabMoved);
 	WidgetLifecycleCounter FirstLifecycle;
 	First->installEventFilter(&FirstLifecycle);
@@ -500,6 +501,7 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	sendMouseEvent(FirstTab, QEvent::MouseMove, SourceContentPos,
 		Qt::NoButton, Qt::LeftButton);
 	QVERIFY(anyDockOverlayVisible(Manager));
+	const int InsertionWidth = FirstTab->width();
 
 	const QPoint TargetHeaderPos = TargetTab->mapToGlobal(
 		QPoint(1, TargetTab->rect().center().y()));
@@ -568,6 +570,75 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	QCOMPARE(TargetArea->dockWidget(1), First);
 	QCOMPARE(TargetArea->dockWidget(2), TargetSecond);
 	QVERIFY(TargetSecondTab->pos().x() > TargetSecondPosition.x());
+}
+
+
+void TabDragTest::floatingDrag_singleTabSourceUsesLiveTabSnapshot()
+{
+	CDockManager Manager;
+	Manager.resize(1000, 500);
+	auto Source = makeDockWidget(Manager, QStringLiteral("Render Graph"));
+	auto Target = makeDockWidget(Manager, QStringLiteral("Target"));
+	auto TargetSecond = makeDockWidget(Manager, QStringLiteral("Target Two"));
+	auto SourceArea = Manager.addDockWidget(CenterDockWidgetArea, Source);
+	auto TargetArea = Manager.addDockWidget(RightDockWidgetArea,
+		Target, SourceArea);
+	Manager.addDockWidgetTabToArea(TargetSecond, TargetArea);
+	TargetArea->setCurrentDockWidget(Target);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto SourceTab = Source->tabWidget();
+	auto TargetTab = Target->tabWidget();
+	auto TargetSecondTab = TargetSecond->tabWidget();
+	auto TargetTabBar = TargetArea->titleBar()->tabBar();
+	QCOMPARE(SourceArea->dockWidgetsCount(), 1);
+	const int SourceTitleBarWidth = SourceArea->titleBar()->width();
+	const QPoint TargetPosition = TargetTab->pos();
+	const QPoint TargetSecondPosition = TargetSecondTab->pos();
+
+	const QPoint PressPos = SourceTab->mapToGlobal(
+		SourceTab->rect().center());
+	sendMouseEvent(SourceTab, QEvent::MouseButtonPress, PressPos,
+		Qt::LeftButton, Qt::LeftButton);
+
+	// Models a Wizard tab becoming active and exposing its expanded subtab
+	// section after mouse-down but before the vertical detach threshold.
+	const int ExpandedTabWidth = 260;
+	SourceTab->setFixedWidth(ExpandedTabWidth);
+	if (SourceTab->parentWidget() && SourceTab->parentWidget()->layout())
+	{
+		SourceTab->parentWidget()->layout()->activate();
+	}
+	QApplication::processEvents();
+	QCOMPARE(SourceTab->width(), ExpandedTabWidth);
+	QVERIFY(SourceTitleBarWidth > ExpandedTabWidth);
+
+	const QPoint UndockPos = PressPos
+		+ QPoint(0, CDockManager::startDragDistance());
+	sendMouseEvent(SourceTab, QEvent::MouseMove, UndockPos,
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(SourceTab->dragState(), DraggingFloatingWidget);
+
+	const QPoint TargetHeaderPos = TargetTab->mapToGlobal(
+		QPoint(1, TargetTab->rect().center().y()));
+	sendMouseEvent(SourceTab, QEvent::MouseMove, TargetHeaderPos,
+		Qt::NoButton, Qt::LeftButton);
+	QApplication::processEvents();
+
+	auto Preview = Manager.findChild<CFloatingDragPreview*>();
+	QVERIFY(Preview);
+	QCOMPARE(Preview->width(), ExpandedTabWidth);
+	QCOMPARE(Preview->height(), SourceTab->height());
+	QVERIFY(Preview->width() < SourceTitleBarWidth);
+	QCOMPARE(TargetTabBar->externalTabDragPreviewWidth(),
+		ExpandedTabWidth);
+	QCOMPARE(TargetTab->pos(), TargetPosition);
+	QCOMPARE(TargetSecondTab->pos(),
+		TargetSecondPosition + QPoint(ExpandedTabWidth, 0));
+
+	sendMouseEvent(SourceTab, QEvent::MouseButtonRelease, TargetHeaderPos,
+		Qt::LeftButton, Qt::NoButton);
 }
 
 QTEST_MAIN(TabDragTest)

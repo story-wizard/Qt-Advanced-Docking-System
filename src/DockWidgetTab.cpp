@@ -78,7 +78,6 @@ struct DockWidgetTabPrivate
 	QSpacerItem* IconTextSpacer;
 	QPoint TabDragStartPosition;
 	QSize IconSize;
-	int DragStartTabWidth = 0;
 
 	/**
 	 * Private data constructor
@@ -515,7 +514,6 @@ void CDockWidgetTab::mousePressEvent(QMouseEvent* ev)
 	if (ev->button() == Qt::LeftButton)
 	{
 		ev->accept();
-		d->DragStartTabWidth = width();
         d->saveDragStartMousePosition(internal::globalPositionOf(ev));
         d->DragState = DraggingMousePressed;
         if (CDockManager::testConfigFlag(CDockManager::FocusHighlighting))
@@ -539,7 +537,6 @@ void CDockWidgetTab::mouseReleaseEvent(QMouseEvent* ev)
 		auto CurrentDragState = d->DragState;
 		d->GlobalDragStartMousePosition = QPoint();
 		d->DragStartMousePosition = QPoint();
-		d->DragStartTabWidth = 0;
 		d->DragState = DraggingInactive;
 
 		switch (CurrentDragState)
@@ -866,13 +863,6 @@ const QIcon& CDockWidgetTab::icon() const
 QString CDockWidgetTab::text() const
 {
 	return d->TitleLabel->text();
-}
-
-
-//============================================================================
-int CDockWidgetTab::dragStartTabWidth() const
-{
-	return d->DragStartTabWidth;
 }
 
 

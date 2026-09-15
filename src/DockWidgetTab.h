@@ -137,12 +137,6 @@ public:
 	QString text() const;
 
 	/**
-	 * [Wizard NLE fork] Returns the tab width captured at the start of the
-	 * current mouse gesture, before reorder or detachment can resize it.
-	 */
-	int dragStartTabWidth() const;
-
-	/**
 	 * Sets the tab text
 	 */
 	void setText(const QString& title);
