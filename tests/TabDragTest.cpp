@@ -20,6 +20,42 @@ using namespace ads;
 namespace
 {
 
+class WidgetLifecycleCounter : public QObject
+{
+public:
+	int ParentChanges = 0;
+	int Shows = 0;
+	int Hides = 0;
+
+	void reset()
+	{
+		ParentChanges = 0;
+		Shows = 0;
+		Hides = 0;
+	}
+
+protected:
+	bool eventFilter(QObject* Watched, QEvent* Event) override
+	{
+		Q_UNUSED(Watched)
+		switch (Event->type())
+		{
+		case QEvent::ParentChange:
+			++ParentChanges;
+			break;
+		case QEvent::Show:
+			++Shows;
+			break;
+		case QEvent::Hide:
+			++Hides;
+			break;
+		default:
+			break;
+		}
+		return false;
+	}
+};
+
 void sendMouseEvent(QWidget* Target, QEvent::Type Type,
 	const QPoint& GlobalPos, Qt::MouseButton Button, Qt::MouseButtons Buttons)
 {
@@ -73,11 +109,20 @@ void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
 	QVERIFY(SecondTab->isVisible());
 	QVERIFY(ThirdTab->isVisible());
 	QSignalSpy TabMovedSpy(TabBar, &CDockAreaTabBar::tabMoved);
+	QSignalSpy CurrentChangingSpy(DockArea,
+		&CDockAreaWidget::currentChanging);
+	QSignalSpy CurrentChangedSpy(DockArea,
+		&CDockAreaWidget::currentChanged);
+	WidgetLifecycleCounter FirstLifecycle;
+	First->installEventFilter(&FirstLifecycle);
 
 	const QPoint PressPos = FirstTab->mapToGlobal(FirstTab->rect().center());
 	sendMouseEvent(FirstTab, QEvent::MouseButtonPress, PressPos,
 		Qt::LeftButton, Qt::LeftButton);
 	QApplication::processEvents();
+	CurrentChangingSpy.clear();
+	CurrentChangedSpy.clear();
+	FirstLifecycle.reset();
 
 	const int DragStartLeft = FirstTab->pos().x();
 	const int SecondRequiredOverlap = qMax(1,
@@ -110,6 +155,11 @@ void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
 	QCOMPARE(FirstTab->dragState(), DraggingTab);
 	QCOMPARE(TabMovedSpy.count(), 0);
 	QCOMPARE(DockArea->dockWidget(0), First);
+	QCOMPARE(CurrentChangingSpy.count(), 0);
+	QCOMPARE(CurrentChangedSpy.count(), 0);
+	QCOMPARE(FirstLifecycle.ParentChanges, 0);
+	QCOMPARE(FirstLifecycle.Shows, 0);
+	QCOMPARE(FirstLifecycle.Hides, 0);
 
 	sendMouseEvent(FirstTab, QEvent::MouseMove, AtRequiredOverlap,
 		Qt::NoButton, Qt::LeftButton);
@@ -117,6 +167,12 @@ void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
 	QCOMPARE(TabMovedSpy.at(0).at(0).toInt(), 0);
 	QCOMPARE(TabMovedSpy.at(0).at(1).toInt(), 1);
 	QCOMPARE(DockArea->dockWidget(1), First);
+	QCOMPARE(DockArea->currentDockWidget(), First);
+	QCOMPARE(CurrentChangingSpy.count(), 0);
+	QCOMPARE(CurrentChangedSpy.count(), 0);
+	QCOMPARE(FirstLifecycle.ParentChanges, 0);
+	QCOMPARE(FirstLifecycle.Shows, 0);
+	QCOMPARE(FirstLifecycle.Hides, 0);
 
 	// Small movements around the swap boundary must not immediately undo it.
 	sendMouseEvent(FirstTab, QEvent::MouseMove, JustPastRequiredOverlap,
@@ -133,6 +189,12 @@ void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
 	QCOMPARE(TabMovedSpy.at(1).at(0).toInt(), 1);
 	QCOMPARE(TabMovedSpy.at(1).at(1).toInt(), 2);
 	QCOMPARE(DockArea->dockWidget(2), First);
+	QCOMPARE(DockArea->currentDockWidget(), First);
+	QCOMPARE(CurrentChangingSpy.count(), 0);
+	QCOMPARE(CurrentChangedSpy.count(), 0);
+	QCOMPARE(FirstLifecycle.ParentChanges, 0);
+	QCOMPARE(FirstLifecycle.Shows, 0);
+	QCOMPARE(FirstLifecycle.Hides, 0);
 	QCOMPARE(FirstTab->dragState(), DraggingTab);
 
 	sendMouseEvent(FirstTab, QEvent::MouseMove, BackAcrossThird,
