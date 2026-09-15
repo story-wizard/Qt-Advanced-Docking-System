@@ -571,6 +571,7 @@ void CDockContainerWidget::showDropOverlays(CDockManager* DockManager,
 	}
 
 	ContainerOverlay->setAllowedAreas(AllowedContainerAreas);
+	ContainerOverlay->setDropPreviewOutlineOnly(false);
 
 	DockWidgetArea ContainerArea = ContainerOverlay->showOverlay(TopContainer, GlobalPos);
 	ContainerOverlay->enableDropPreview(ContainerArea != InvalidDockWidgetArea);
@@ -589,6 +590,7 @@ void CDockContainerWidget::showDropOverlays(CDockManager* DockManager,
 		const bool HeaderHasPriority = dockAreaHeaderHasDropPriority(
 			DockArea, GlobalPos, Area, ContainerArea,
 			ContainerOverlay->dropIndicatorAreaUnderCursor(GlobalPos));
+		DockAreaOverlay->setDropPreviewOutlineOnly(HeaderHasPriority);
 
 		// A CenterDockWidgetArea for the dockAreaOverlay() indicates that
 		// the mouse is in the title bar. A forgiving container edge target

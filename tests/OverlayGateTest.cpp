@@ -74,6 +74,7 @@ private slots:
 	void setDropOverlaysEnabled_roundtrips();
 	void setDropOverlaysEnabled_equalValueIsNoOp();
 	void setDropOverlaysEnabled_falseHidesBothOverlays();
+	void outlineOnlyDropPreview_doesNotOwnDragHeader();
 	void topHeader_beatsForgivingContainerEdgeOnPreviewAndDrop();
 	void topHeader_doesNotBeatExplicitContainerIndicator();
 	void dragCancelEvent_isRegisteredAndDistinct();
@@ -139,6 +140,31 @@ void OverlayGateTest::setDropOverlaysEnabled_falseHidesBothOverlays()
 	QVERIFY(manager.dockAreaOverlay()->isHidden());
 }
 
+void OverlayGateTest::outlineOnlyDropPreview_doesNotOwnDragHeader()
+{
+	TestDockManager Manager;
+	Manager.resize(600, 400);
+	auto Target = makeDockWidget(Manager, QStringLiteral("Target"));
+	auto TargetArea = Manager.addDockWidget(CenterDockWidgetArea, Target);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto Overlay = Manager.dockAreaOverlay();
+	Overlay->setAllowedAreas(CenterDockWidgetArea);
+	Overlay->setDropPreviewOutlineOnly(true);
+	const QPoint HeaderPos = TargetArea->titleBar()->mapToGlobal(
+		TargetArea->titleBar()->rect().center());
+	QCOMPARE(Overlay->showOverlay(TargetArea, HeaderPos),
+		CenterDockWidgetArea);
+
+	QPixmap TabPreview(120, 24);
+	TabPreview.fill(Qt::blue);
+	QVERIFY(!Overlay->setDragPreviewHeader(TabPreview, HeaderPos));
+
+	Overlay->setDropPreviewOutlineOnly(false);
+	QVERIFY(Overlay->setDragPreviewHeader(TabPreview, HeaderPos));
+}
+
 void OverlayGateTest::topHeader_beatsForgivingContainerEdgeOnPreviewAndDrop()
 {
 	ConfigRestorer RestoreConfig;
@@ -181,6 +207,7 @@ void OverlayGateTest::topHeader_beatsForgivingContainerEdgeOnPreviewAndDrop()
 	TestDockManager::showDropOverlays(&Manager, &Manager, HeaderPos, false);
 	QCOMPARE(Manager.dockAreaOverlay()->visibleDropAreaUnderCursor(HeaderPos),
 		CenterDockWidgetArea);
+	QVERIFY(Manager.dockAreaOverlay()->dropPreviewOutlineOnly());
 	QCOMPARE(Manager.containerOverlay()->visibleDropAreaUnderCursor(HeaderPos),
 		InvalidDockWidgetArea);
 

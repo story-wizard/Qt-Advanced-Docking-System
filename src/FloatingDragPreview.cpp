@@ -337,6 +337,7 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 		AllowedContainerAreas |= AutoHideDockAreas;
 	}
 	ContainerOverlay->setAllowedAreas(AllowedContainerAreas);
+	ContainerOverlay->setDropPreviewOutlineOnly(false);
 	auto ContainerDropArea = InvalidDockWidgetArea;
 	auto DockDropArea = InvalidDockWidgetArea;
 
@@ -376,7 +377,17 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 					TabInsertionWidth, DragDirection);
 			}
 			ContainerOverlay->hideOverlay();
-			DockAreaOverlay->hideOverlay();
+			if (DockArea == SourceArea)
+			{
+				DockAreaOverlay->hideOverlay();
+			}
+			else
+			{
+				DockAreaOverlay->setAllowedAreas(CenterDockWidgetArea);
+				DockAreaOverlay->setDropPreviewOutlineOnly(true);
+				DockAreaOverlay->enableDropPreview(true);
+				DockAreaOverlay->showOverlay(DockArea, GlobalPos);
+			}
 			setHeaderOnly(true, DockArea, GlobalPos);
 			if (CDockManager::testConfigFlag(
 				CDockManager::DragPreviewIsDynamic))
@@ -410,6 +421,7 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 			CDockContainerWidget::dockAreaHeaderHasDropPriority(
 				DockArea, GlobalPos, DockDropArea, ContainerDropArea,
 				ContainerOverlay->dropIndicatorAreaUnderCursor(GlobalPos));
+		DockAreaOverlay->setDropPreviewOutlineOnly(HeaderHasPriority);
 
 		// A CenterDockWidgetArea for the dockAreaOverlay() indicates that
 		// the mouse is in the title bar. The header beats only a forgiving

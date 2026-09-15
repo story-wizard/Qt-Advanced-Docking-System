@@ -89,6 +89,17 @@ bool anyDockOverlayVisible(CDockManager& Manager)
 		[](const CDockOverlay* Overlay) { return Overlay->isVisible(); });
 }
 
+bool anyOutlineOnlyDockOverlayVisible(CDockManager& Manager)
+{
+	const auto Overlays = Manager.findChildren<CDockOverlay*>();
+	return std::any_of(Overlays.cbegin(), Overlays.cend(),
+		[](const CDockOverlay* Overlay)
+		{
+			return Overlay->isVisible()
+				&& Overlay->dropPreviewOutlineOnly();
+		});
+}
+
 }
 
 class TabDragTest : public QObject
@@ -635,7 +646,8 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 		TargetTab->size());
 	QVERIFY(TargetViewportRect.intersects(TargetTabBar->viewport()->rect()));
 	QVERIFY(TargetViewportRect.left() > TargetViewportLeft);
-	QVERIFY(!anyDockOverlayVisible(Manager));
+	QVERIFY(anyDockOverlayVisible(Manager));
+	QVERIFY(anyOutlineOnlyDockOverlayVisible(Manager));
 	QCOMPARE(TabMovedSpy.count(), 0);
 	QCOMPARE(FirstLifecycle.ParentChanges, 0);
 	QCOMPARE(FirstLifecycle.Shows, 0);

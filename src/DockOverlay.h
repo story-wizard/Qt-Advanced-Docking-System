@@ -170,6 +170,18 @@ public:
 		const QPoint& GlobalTopLeft);
 
 	/**
+	 * Shows the drop target as a highlight-colored outline without the normal
+	 * translucent fill or docking indicators. Used when a dragged tab is
+	 * already locked into a destination header.
+	 */
+	void setDropPreviewOutlineOnly(bool OutlineOnly);
+
+	/**
+	 * Returns true if the current drop preview is rendered as an outline only.
+	 */
+	bool dropPreviewOutlineOnly() const;
+
+	/**
 	 * Enables / disables the semi transparent overlay rectangle that represents
 	 * the future area of the dropped widget
 	 */
