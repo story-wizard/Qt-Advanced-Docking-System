@@ -110,6 +110,8 @@ private slots:
 	void inactiveTab_clickActivatesOnlyOnRelease();
 	void inactiveTab_reordersWithoutActivation();
 	void horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail();
+	void externalPreview_preservesCurrentTab_data();
+	void externalPreview_preservesCurrentTab();
 	void externalPreview_shiftsTabsWithoutChangingPanelState();
 	void externalPreview_rapidReversalRetargetsInFlightSlide();
 	void externalPreview_tabRemovalCancelsInFlightSlides();
@@ -364,6 +366,72 @@ void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
 		Qt::LeftButton, Qt::NoButton);
 	QCOMPARE(FirstTab->dragState(), DraggingInactive);
 	QCOMPARE(FirstTab->pos(), QPoint(0, 0));
+}
+
+
+void TabDragTest::externalPreview_preservesCurrentTab_data()
+{
+	QTest::addColumn<int>("CurrentIndex");
+	QTest::addColumn<int>("InsertionIndex");
+	for (int CurrentIndex = 0; CurrentIndex < 3; ++CurrentIndex)
+	{
+		for (int InsertionIndex = 0; InsertionIndex <= 3; ++InsertionIndex)
+		{
+			const QByteArray Name = QByteArray("current-")
+				+ QByteArray::number(CurrentIndex) + "-insert-"
+				+ QByteArray::number(InsertionIndex);
+			QTest::newRow(Name.constData()) << CurrentIndex << InsertionIndex;
+		}
+	}
+}
+
+
+void TabDragTest::externalPreview_preservesCurrentTab()
+{
+	QFETCH(int, CurrentIndex);
+	QFETCH(int, InsertionIndex);
+	CDockManager Manager;
+	Manager.resize(720, 450);
+	auto First = makeDockWidget(Manager, QStringLiteral("First"));
+	auto Second = makeDockWidget(Manager, QStringLiteral("Second"));
+	auto Third = makeDockWidget(Manager, QStringLiteral("Third"));
+	auto DockArea = Manager.addDockWidget(CenterDockWidgetArea, First);
+	Manager.addDockWidgetTabToArea(Second, DockArea);
+	Manager.addDockWidgetTabToArea(Third, DockArea);
+	DockArea->setCurrentIndex(CurrentIndex);
+	Manager.show();
+	QApplication::processEvents();
+
+	auto TabBar = DockArea->titleBar()->tabBar();
+	auto CurrentDockWidget = DockArea->dockWidget(CurrentIndex);
+	auto CurrentTab = CurrentDockWidget->tabWidget();
+	QCOMPARE(TabBar->currentTab(), CurrentTab);
+	QSignalSpy CurrentChangingSpy(DockArea, &CDockAreaWidget::currentChanging);
+	QSignalSpy CurrentChangedSpy(DockArea, &CDockAreaWidget::currentChanged);
+
+	const int PreviewWidth = 80;
+	auto BoundaryTab = TabBar->tab(qMin(InsertionIndex, TabBar->count() - 1));
+	const int BoundaryCenter = BoundaryTab->mapToGlobal(
+		BoundaryTab->rect().center()).x();
+	const int DraggedLeft = BoundaryCenter - PreviewWidth / 2
+		+ (InsertionIndex == TabBar->count() ? 1 : -1);
+	QCOMPARE(TabBar->previewExternalTabDrag(DraggedLeft, PreviewWidth, 0),
+		InsertionIndex);
+	QCOMPARE(TabBar->count(), 3);
+	QCOMPARE(TabBar->currentIndex(), CurrentIndex);
+	QCOMPARE(TabBar->currentTab(), CurrentTab);
+	QCOMPARE(TabBar->tab(CurrentIndex), CurrentTab);
+	QCOMPARE(DockArea->currentDockWidget(), CurrentDockWidget);
+	QCOMPARE(CurrentChangingSpy.count(), 0);
+	QCOMPARE(CurrentChangedSpy.count(), 0);
+
+	TabBar->clearExternalTabDragPreview();
+	QCOMPARE(TabBar->count(), 3);
+	QCOMPARE(TabBar->currentIndex(), CurrentIndex);
+	QCOMPARE(TabBar->currentTab(), CurrentTab);
+	QCOMPARE(DockArea->currentDockWidget(), CurrentDockWidget);
+	QCOMPARE(CurrentChangingSpy.count(), 0);
+	QCOMPARE(CurrentChangedSpy.count(), 0);
 }
 
 

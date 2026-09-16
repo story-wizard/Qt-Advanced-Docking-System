@@ -39,10 +39,16 @@ jobs:
             -DCMAKE_PREFIX_PATH="${{ env.QT_DIR }}/Qt/${{ env.QT_VERSION }}/gcc_64" \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=ON \
             -G Ninja
 
     - name: Build
       run: cmake --build build
+
+    - name: Run fork regression tests
+      env:
+        QT_QPA_PLATFORM: offscreen
+      run: ctest --test-dir build --output-on-failure --no-tests=error
 
     - name: Run CMake install (optional)
       run: cmake --install build
