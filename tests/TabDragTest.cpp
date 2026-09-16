@@ -10,6 +10,7 @@
 #include <QMouseEvent>
 #include <QScrollBar>
 #include <QSignalSpy>
+#include <QVariantAnimation>
 
 #include "DockAreaTabBar.h"
 #include "DockAreaTitleBar.h"
@@ -82,6 +83,17 @@ CDockWidget* makeDockWidget(CDockManager& Manager, const QString& Title)
 	return DockWidget;
 }
 
+bool tabSlidesSettled(CDockAreaTabBar* TabBar)
+{
+	const auto Animations = TabBar->findChildren<QVariantAnimation*>(
+		QString(), Qt::FindDirectChildrenOnly);
+	return std::all_of(Animations.cbegin(), Animations.cend(),
+		[](const QVariantAnimation* Animation)
+		{
+			return Animation->state() != QAbstractAnimation::Running;
+		});
+}
+
 bool anyDockOverlayVisible(CDockManager& Manager)
 {
 	const auto Overlays = Manager.findChildren<CDockOverlay*>();
@@ -136,10 +148,13 @@ void TabDragTest::inactiveTab_clickActivatesOnlyOnRelease()
 
 	auto SecondTab = Second->tabWidget();
 	QSignalSpy ClickedSpy(SecondTab, &CDockWidgetTab::clicked);
+	QVERIFY(ClickedSpy.isValid());
 	QSignalSpy CurrentChangingSpy(DockArea,
 		&CDockAreaWidget::currentChanging);
+	QVERIFY(CurrentChangingSpy.isValid());
 	QSignalSpy CurrentChangedSpy(DockArea,
 		&CDockAreaWidget::currentChanged);
+	QVERIFY(CurrentChangedSpy.isValid());
 	const QPoint PressPos = SecondTab->mapToGlobal(
 		SecondTab->rect().center());
 
@@ -181,11 +196,15 @@ void TabDragTest::inactiveTab_reordersWithoutActivation()
 	auto SecondTab = Second->tabWidget();
 	auto TabBar = DockArea->titleBar()->tabBar();
 	QSignalSpy ClickedSpy(SecondTab, &CDockWidgetTab::clicked);
+	QVERIFY(ClickedSpy.isValid());
 	QSignalSpy TabMovedSpy(TabBar, &CDockAreaTabBar::tabMoved);
+	QVERIFY(TabMovedSpy.isValid());
 	QSignalSpy CurrentChangingSpy(DockArea,
 		&CDockAreaWidget::currentChanging);
+	QVERIFY(CurrentChangingSpy.isValid());
 	QSignalSpy CurrentChangedSpy(DockArea,
 		&CDockAreaWidget::currentChanged);
+	QVERIFY(CurrentChangedSpy.isValid());
 
 	const QPoint PressPos = SecondTab->mapToGlobal(
 		SecondTab->rect().center());
@@ -248,10 +267,13 @@ void TabDragTest::horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail()
 	QVERIFY(SecondTab->isVisible());
 	QVERIFY(ThirdTab->isVisible());
 	QSignalSpy TabMovedSpy(TabBar, &CDockAreaTabBar::tabMoved);
+	QVERIFY(TabMovedSpy.isValid());
 	QSignalSpy CurrentChangingSpy(DockArea,
 		&CDockAreaWidget::currentChanging);
+	QVERIFY(CurrentChangingSpy.isValid());
 	QSignalSpy CurrentChangedSpy(DockArea,
 		&CDockAreaWidget::currentChanged);
+	QVERIFY(CurrentChangedSpy.isValid());
 	WidgetLifecycleCounter FirstLifecycle;
 	First->installEventFilter(&FirstLifecycle);
 
@@ -407,7 +429,9 @@ void TabDragTest::externalPreview_preservesCurrentTab()
 	auto CurrentTab = CurrentDockWidget->tabWidget();
 	QCOMPARE(TabBar->currentTab(), CurrentTab);
 	QSignalSpy CurrentChangingSpy(DockArea, &CDockAreaWidget::currentChanging);
+	QVERIFY(CurrentChangingSpy.isValid());
 	QSignalSpy CurrentChangedSpy(DockArea, &CDockAreaWidget::currentChanged);
+	QVERIFY(CurrentChangedSpy.isValid());
 
 	const int PreviewWidth = 80;
 	auto BoundaryTab = TabBar->tab(qMin(InsertionIndex, TabBar->count() - 1));
@@ -460,8 +484,10 @@ void TabDragTest::externalPreview_shiftsTabsWithoutChangingPanelState()
 	const QPoint ThirdPosition = ThirdTab->pos();
 	const QPoint ControlPosition = HeaderControl->mapToGlobal(QPoint());
 	QSignalSpy TabMovedSpy(TabBar, &CDockAreaTabBar::tabMoved);
+	QVERIFY(TabMovedSpy.isValid());
 	QSignalSpy ExternalPreviewSpy(
 		TabBar, &CDockAreaTabBar::externalTabDragPreviewChanged);
+	QVERIFY(ExternalPreviewSpy.isValid());
 
 	const int PreviewWidth = 80;
 	const int FirstRequiredOverlap = qMax(1,
@@ -610,8 +636,15 @@ void TabDragTest::externalPreview_tabRemovalCancelsInFlightSlides()
 	QApplication::processEvents();
 	QCOMPARE(TabBar->count(), 1);
 	QCOMPARE(TabBar->externalTabDragPreviewWidth(), 0);
-	QTest::qWait(100);
-	QCOMPARE(TabBar->count(), 1);
+	QCOMPARE(TabBar->tab(0), Second->tabWidget());
+	QCOMPARE(DockArea->currentDockWidget(), Second);
+	QVERIFY(tabSlidesSettled(TabBar));
+	QTRY_COMPARE(Second->tabWidget()->pos(), QPoint());
+	// Drain deferred animation deletion and confirm the survivor stays seated.
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+	QApplication::processEvents();
+	QVERIFY(TabBar->findChildren<QVariantAnimation*>().isEmpty());
+	QCOMPARE(Second->tabWidget()->pos(), QPoint());
 }
 
 
@@ -677,6 +710,7 @@ void TabDragTest::floatingDrag_reenteringSourceHeaderResumesTabReorder()
 	auto ThirdTab = Third->tabWidget();
 	auto TabBar = DockArea->titleBar()->tabBar();
 	QSignalSpy TabMovedSpy(TabBar, &CDockAreaTabBar::tabMoved);
+	QVERIFY(TabMovedSpy.isValid());
 	WidgetLifecycleCounter FirstLifecycle;
 	First->installEventFilter(&FirstLifecycle);
 
@@ -748,6 +782,7 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	const int TargetViewportLeft = TargetTab->mapTo(
 		TargetTabBar->viewport(), QPoint()).x();
 	QSignalSpy TabMovedSpy(TargetTabBar, &CDockAreaTabBar::tabMoved);
+	QVERIFY(TabMovedSpy.isValid());
 	WidgetLifecycleCounter FirstLifecycle;
 	First->installEventFilter(&FirstLifecycle);
 
@@ -836,7 +871,10 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 	QCOMPARE(TargetArea->dockWidget(0), TargetSibling);
 	QCOMPARE(TargetArea->dockWidget(1), First);
 	QCOMPARE(TargetArea->dockWidget(2), TargetSecond);
-	QVERIFY(TargetSecondTab->pos().x() > TargetSecondPosition.x());
+	QCOMPARE(TargetTabBar->externalTabDragPreviewWidth(), 0);
+	QVERIFY(tabSlidesSettled(TargetTabBar));
+	QTRY_COMPARE(TargetSecondTab->pos(),
+		FirstTab->pos() + QPoint(FirstTab->width(), 0));
 }
 
 
@@ -907,6 +945,15 @@ void TabDragTest::floatingDrag_singleTabSourceUsesLiveTabSnapshot()
 
 	sendMouseEvent(SourceTab, QEvent::MouseButtonRelease, TargetHeaderPos,
 		Qt::LeftButton, Qt::NoButton);
+	QCOMPARE(SourceTab->dragState(), DraggingInactive);
+	QCOMPARE(Source->dockAreaWidget(), TargetArea);
+	QCOMPARE(TargetArea->currentDockWidget(), Source);
+	QCOMPARE(TargetArea->dockWidgetsCount(), 3);
+	QCOMPARE(TargetArea->dockWidget(0), Target);
+	QCOMPARE(TargetArea->dockWidget(1), Source);
+	QCOMPARE(TargetArea->dockWidget(2), TargetSecond);
+	QCOMPARE(TargetTabBar->externalTabDragPreviewWidth(), 0);
+	QVERIFY(tabSlidesSettled(TargetTabBar));
 }
 
 
@@ -954,6 +1001,14 @@ void TabDragTest::floatingDrag_inactiveTabUsesVisibleSourceAreaSize()
 		Qt::NoButton, Qt::LeftButton);
 	sendMouseEvent(SourceTab, QEvent::MouseButtonRelease, TargetHeaderPos,
 		Qt::LeftButton, Qt::NoButton);
+	QCOMPARE(SourceTab->dragState(), DraggingInactive);
+	QCOMPARE(Source->dockAreaWidget(), TargetArea);
+	QCOMPARE(TargetArea->currentDockWidget(), Source);
+	QCOMPARE(TargetArea->dockWidgetsCount(), 2);
+	QCOMPARE(TargetArea->dockWidget(0), Target);
+	QCOMPARE(TargetArea->dockWidget(1), Source);
+	QCOMPARE(TargetArea->titleBar()->tabBar()->externalTabDragPreviewWidth(), 0);
+	QVERIFY(tabSlidesSettled(TargetArea->titleBar()->tabBar()));
 }
 
 QTEST_MAIN(TabDragTest)

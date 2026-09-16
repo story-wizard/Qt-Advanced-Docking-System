@@ -153,12 +153,11 @@ void OverlayGateTest::startDragDistance_defaultsToTwiceApplicationThreshold()
 
 void OverlayGateTest::startDragDistance_usesConfiguredMultiplier()
 {
+	ConfigRestorer RestoreConfig;
 	CDockManager::setStartDragDistanceMultiplier(1.25);
 	QCOMPARE(CDockManager::startDragDistanceMultiplier(), qreal(1.25));
 	QCOMPARE(CDockManager::startDragDistance(),
 		qRound(QApplication::startDragDistance() * 1.25));
-
-	CDockManager::setStartDragDistanceMultiplier(2.0);
 }
 
 void OverlayGateTest::floatingWindowDockDistance_defaultsToTwiceApplicationThreshold()

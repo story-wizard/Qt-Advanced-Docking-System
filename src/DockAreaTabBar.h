@@ -132,6 +132,10 @@ public:
 	 * without changing the real tab or dock-widget order. Existing tabs move
 	 * around a temporary gap one at a time using the same one-third overlap and
 	 * reverse-hysteresis behavior as an ordinary tab drag.
+	 * DraggedLeftGlobal is the dragged tab's left x-coordinate in global
+	 * logical pixels; DraggedWidth is its width in logical pixels.
+	 * DragDirection is -1 (left), 0 (stationary), or 1 (right).
+	 * Returns the destination layout insertion index, including hidden tabs.
 	 */
 	int previewExternalTabDrag(int DraggedLeftGlobal, int DraggedWidth,
 		int DragDirection);
