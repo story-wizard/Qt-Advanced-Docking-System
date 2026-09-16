@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QLayout>
 #include <QMouseEvent>
+#include <QPointer>
 #include <QScrollBar>
 #include <QSignalSpy>
 #include <QVariantAnimation>
@@ -132,6 +133,8 @@ private slots:
 	void floatingDrag_enteringAnotherHeaderPreviewsUntilRelease();
 	void floatingDrag_singleTabSourceUsesLiveTabSnapshot();
 	void floatingDrag_inactiveTabUsesVisibleSourceAreaSize();
+	void floatingDrag_invalidatedGestureCancels_data();
+	void floatingDrag_invalidatedGestureCancels();
 };
 
 void TabDragTest::inactiveTab_clickActivatesOnlyOnRelease()
@@ -691,6 +694,99 @@ void TabDragTest::externalPreview_wideSlotKeepsDestinationTabVisible()
 	QCOMPARE(TabBar->horizontalScrollBar()->value(), OriginalScroll);
 }
 
+
+void TabDragTest::floatingDrag_invalidatedGestureCancels_data()
+{
+	QTest::addColumn<QString>("Invalidation");
+	for (const char* Case : {"preview-destroyed", "source-dock-destroyed",
+		"source-area-destroyed", "destination-rejected"})
+	{
+		QTest::newRow(Case) << QString::fromLatin1(Case);
+	}
+}
+
+void TabDragTest::floatingDrag_invalidatedGestureCancels()
+{
+	QFETCH(QString, Invalidation);
+	CDockManager Manager;
+	Manager.resize(1000, 600);
+	QPointer<CDockWidget> Source = makeDockWidget(Manager, "Source");
+	QPointer<CDockAreaWidget> SourceArea =
+		Manager.addDockWidget(CenterDockWidgetArea, Source);
+	if (Invalidation != "source-area-destroyed")
+	{
+		Manager.addDockWidgetTabToArea(
+			makeDockWidget(Manager, "Source sibling"), SourceArea);
+	}
+	auto Target = makeDockWidget(Manager, "Target");
+	auto TargetArea = Manager.addDockWidget(RightDockWidgetArea,
+		Target, SourceArea);
+	Manager.addDockWidgetTabToArea(
+		makeDockWidget(Manager, "Target sibling"), TargetArea);
+	SourceArea->setCurrentDockWidget(Source);
+	Manager.show();
+	QApplication::processEvents();
+	QPointer<CDockWidgetTab> SourceTab = Source->tabWidget();
+	const QPoint Press = SourceTab->mapToGlobal(SourceTab->rect().center());
+	sendMouseEvent(SourceTab, QEvent::MouseButtonPress, Press,
+		Qt::LeftButton, Qt::LeftButton);
+	sendMouseEvent(SourceTab, QEvent::MouseMove,
+		Press + QPoint(0, CDockManager::startDragDistance()),
+		Qt::NoButton, Qt::LeftButton);
+	QPointer<CFloatingDragPreview> Preview =
+		Manager.findChild<CFloatingDragPreview*>();
+	QVERIFY(Preview);
+	QCOMPARE(SourceTab->dragState(), DraggingFloatingWidget);
+	auto TargetBar = TargetArea->titleBar()->tabBar();
+	const QPoint Header = Target->tabWidget()->mapToGlobal(QPoint(1, 10));
+	sendMouseEvent(SourceTab, QEvent::MouseMove, Header,
+		Qt::NoButton, Qt::LeftButton);
+	QVERIFY(TargetBar->externalTabDragPreviewWidth() > 0);
+
+	if (Invalidation == "preview-destroyed")
+	{
+		delete Preview.data();
+		QCOMPARE(SourceTab->dragState(), DraggingInactive);
+		sendMouseEvent(SourceTab, QEvent::MouseMove, Header,
+			Qt::NoButton, Qt::LeftButton);
+		sendMouseEvent(SourceTab, QEvent::MouseButtonRelease, Header,
+			Qt::LeftButton, Qt::NoButton);
+	}
+	else if (Invalidation == "destination-rejected")
+	{
+		// No intervening move: acceptance must be checked again on release.
+		TargetArea->setAllowedAreas(OuterDockAreas);
+		sendMouseEvent(SourceTab, QEvent::MouseButtonRelease, Header,
+			Qt::LeftButton, Qt::NoButton);
+		QCOMPARE(SourceTab->dragState(), DraggingInactive);
+	}
+	else
+	{
+		Manager.removeDockWidget(Source);
+		if (Invalidation == "source-dock-destroyed")
+		{
+			delete Source.data();
+			QVERIFY(!SourceTab);
+		}
+		else
+		{
+			QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+			QVERIFY(!SourceArea);
+			if (Preview)
+				Preview->moveFloating(Header);
+		}
+		if (Preview)
+			QTest::keyClick(Preview, Qt::Key_Escape);
+	}
+	QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+	QVERIFY(!Preview);
+	QCOMPARE(TargetBar->externalTabDragPreviewWidth(), 0);
+	QVERIFY(tabSlidesSettled(TargetBar));
+	QVERIFY(!anyDockOverlayVisible(Manager));
+	QCOMPARE(TargetArea->dockWidgetsCount(), 2);
+	if (Source && SourceArea)
+		QCOMPARE(Source->dockAreaWidget(), SourceArea.data());
+}
 
 void TabDragTest::floatingDrag_reenteringSourceHeaderResumesTabReorder()
 {

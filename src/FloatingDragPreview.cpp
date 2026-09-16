@@ -38,12 +38,12 @@ namespace ads
 struct FloatingDragPreviewPrivate
 {
 	CFloatingDragPreview *_this;
-	QWidget* Content;
+	QPointer<QWidget> Content;
 	CDockWidget::DockWidgetFeatures ContentFeatures;
-	CDockAreaWidget* ContentSourceArea = nullptr;
+	QPointer<CDockAreaWidget> ContentSourceArea;
 	QPoint DragStartMousePosition;
-	CDockManager* DockManager;
-	CDockContainerWidget *DropContainer = nullptr;
+	QPointer<CDockManager> DockManager;
+	QPointer<CDockContainerWidget> DropContainer;
 	qreal WindowOpacity;
 	bool Hidden = false;
 	QPixmap ContentPreviewPixmap;
@@ -62,7 +62,7 @@ struct FloatingDragPreviewPrivate
 	// Wayland hybrid drag: during the in-window phase, hit-testing and overlays
 	// are confined to this container and driven by an explicit, event-supplied
 	// global position instead of the unreliable QCursor::pos().
-	CDockContainerWidget* SourceContainer = nullptr;
+	QPointer<CDockContainerWidget> SourceContainer;
 	QPoint LastGlobalPos;
 	bool HasLastGlobalPos = false;
 
@@ -77,22 +77,23 @@ struct FloatingDragPreviewPrivate
 
 	CDockAreaWidget* sourceArea() const
 	{
-		if (auto DockWidget = qobject_cast<CDockWidget*>(Content))
+		if (auto DockWidget = qobject_cast<CDockWidget*>(Content.data()))
 		{
 			return DockWidget->dockAreaWidget();
 		}
-		return qobject_cast<CDockAreaWidget*>(Content);
+		return qobject_cast<CDockAreaWidget*>(Content.data());
 	}
 
 	void clearTabReorderPreview()
 	{
-		if (TabReorderArea)
-		{
-			TabReorderArea->titleBar()->tabBar()
-				->clearExternalTabDragPreview();
-		}
+		auto TargetArea = TabReorderArea;
 		TabReorderArea = nullptr;
 		TabReorderIndex = -1;
+		if (TargetArea)
+		{
+			TargetArea->titleBar()->tabBar()
+				->clearExternalTabDragPreview();
+		}
 	}
 
 	void setHeaderOnly(bool Value, CDockAreaWidget* TargetArea = nullptr,
@@ -145,7 +146,7 @@ struct FloatingDragPreviewPrivate
 	void updateDropOverlays(const QPoint &GlobalPos);
 	void updateDragPreviewHeaders(const QPoint& GlobalTopLeft)
 	{
-		if (HeaderPreviewPixmap.isNull())
+		if (HeaderPreviewPixmap.isNull() || !DockManager || Canceled)
 		{
 			return;
 		}
@@ -174,15 +175,28 @@ struct FloatingDragPreviewPrivate
 	 */
 	void cancelDragging()
 	{
+		if (Canceled)
+		{
+			return;
+		}
 		Canceled = true;
 		clearTabReorderPreview();
-		Q_EMIT _this->draggingCanceled();
-		DockManager->containerOverlay()->hideOverlay();
-		DockManager->dockAreaOverlay()->hideOverlay();
+		if (DockManager)
+		{
+			DockManager->containerOverlay()->hideOverlay();
+			DockManager->dockAreaOverlay()->hideOverlay();
+		}
 		// Post before close(): WA_DeleteOnClose queues destruction after events
 		// already posted to this preview, so the host can observe cancellation.
 		qApp->postEvent(_this, new QEvent((QEvent::Type)internal::FloatingWidgetDragCancelEvent));
+		QPointer<CFloatingDragPreview> Preview = _this;
 		_this->close();
+		// Observers may destroy the source or preview. Do not touch private
+		// state after notifying them, and do not notify after a synchronous close.
+		if (Preview)
+		{
+			Q_EMIT Preview->draggingCanceled();
+		}
 	}
 
 	/**
@@ -212,13 +226,13 @@ struct FloatingDragPreviewPrivate
 	 */
 	CDockWidget::DockWidgetFeatures contentFeatures() const
 	{
-		CDockWidget* DockWidget = qobject_cast<CDockWidget*>(Content);
+		CDockWidget* DockWidget = qobject_cast<CDockWidget*>(Content.data());
 		if (DockWidget)
 		{
 			return DockWidget->features();
 		}
 
-		CDockAreaWidget* DockArea = qobject_cast<CDockAreaWidget*>(Content);
+		CDockAreaWidget* DockArea = qobject_cast<CDockAreaWidget*>(Content.data());
 		if (DockArea)
 		{
 			return DockArea->features();
@@ -239,7 +253,7 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 	LastDragMouseX = GlobalPos.x();
 	HasLastDragMouseX = true;
 
-	if (!_this->isVisible() || !DockManager)
+	if (!_this->isVisible() || !DockManager || Canceled)
 	{
 		clearTabReorderPreview();
 		setHeaderOnly(false);
@@ -315,7 +329,7 @@ void FloatingDragPreviewPrivate::updateDropOverlays(const QPoint &GlobalPos)
 	int VisibleDockAreas = TopContainer->visibleDockAreaCount();
 
 	// Include the overlay widget we're dragging as a visible widget
-	auto dockAreaWidget = qobject_cast<CDockAreaWidget*>(Content);
+	auto dockAreaWidget = qobject_cast<CDockAreaWidget*>(Content.data());
 	if (dockAreaWidget && dockAreaWidget->isAutoHide())
 	{
 		VisibleDockAreas++;
@@ -480,8 +494,8 @@ FloatingDragPreviewPrivate::FloatingDragPreviewPrivate(CFloatingDragPreview *_pu
 //============================================================================
 void FloatingDragPreviewPrivate::createFloatingWidget()
 {
-	CDockWidget* DockWidget = qobject_cast<CDockWidget*>(Content);
-	CDockAreaWidget* DockArea = qobject_cast<CDockAreaWidget*>(Content);
+	CDockWidget* DockWidget = qobject_cast<CDockWidget*>(Content.data());
+	CDockAreaWidget* DockArea = qobject_cast<CDockAreaWidget*>(Content.data());
 
 	CFloatingDockContainer* FloatingWidget = nullptr;
 
@@ -527,6 +541,7 @@ CFloatingDragPreview::CFloatingDragPreview(QWidget* Content, QWidget* parent) :
 	d(new FloatingDragPreviewPrivate(this))
 {
 	d->Content = Content;
+	connect(Content, &QObject::destroyed, this, [this] { d->cancelDragging(); });
 	d->ContentFeatures = d->contentFeatures();
 	setAttribute(Qt::WA_DeleteOnClose);
 	if (CDockManager::testConfigFlag(CDockManager::DragPreviewHasWindowFrame))
@@ -623,6 +638,11 @@ CFloatingDragPreview::CFloatingDragPreview(CDockAreaWidget* Content)
 CFloatingDragPreview::~CFloatingDragPreview()
 {
 	d->clearTabReorderPreview();
+	if (!d->Canceled && d->DockManager)
+	{
+		d->DockManager->containerOverlay()->hideOverlay();
+		d->DockManager->dockAreaOverlay()->hideOverlay();
+	}
 	delete d;
 }
 
@@ -637,6 +657,15 @@ void CFloatingDragPreview::moveFloating()
 //============================================================================
 void CFloatingDragPreview::moveFloating(const QPoint& GlobalPos)
 {
+	if (d->Canceled)
+	{
+		return;
+	}
+	if (!d->Content || !d->DockManager || !d->sourceArea())
+	{
+		d->cancelDragging();
+		return;
+	}
 	// Only stash the event-supplied position on Wayland, where QCursor::pos()
 	// is unreliable and finishDragging() must reuse it. On other platforms
 	// finishDragging() keeps using the live QCursor::pos() (unchanged behavior).
@@ -676,8 +705,11 @@ void CFloatingDragPreview::cancelDraggingSilently()
 	// Tear down without performing a drop and without emitting draggingCanceled.
 	d->Canceled = true;
 	d->clearTabReorderPreview();
-	d->DockManager->containerOverlay()->hideOverlay();
-	d->DockManager->dockAreaOverlay()->hideOverlay();
+	if (d->DockManager)
+	{
+		d->DockManager->containerOverlay()->hideOverlay();
+		d->DockManager->dockAreaOverlay()->hideOverlay();
+	}
 	close();
 }
 
@@ -697,6 +729,10 @@ bool CFloatingDragPreview::finishDraggingToSourceTabBar()
 //============================================================================
 void CFloatingDragPreview::refreshDropOverlays()
 {
+	if (d->Canceled)
+	{
+		return;
+	}
 	// updateDropOverlays() owns the visibility/manager/gate guards for previews.
 	const QPoint GlobalPos = QCursor::pos();
 	d->updateDropOverlays(GlobalPos);
@@ -752,16 +788,38 @@ void CFloatingDragPreview::startFloating(const QPoint &DragStartMousePos,
 void CFloatingDragPreview::finishDragging()
 {
 	ADS_PRINT("CFloatingDragPreview::finishDragging");
+	if (d->Canceled)
+	{
+		return;
+	}
+	if (!d->Content || !d->DockManager || !d->sourceArea())
+	{
+		d->cancelDragging();
+		return;
+	}
 
 	const QPoint GlobalPos = d->cursorPos();
 	if (d->TabReorderArea && d->TabReorderArea != d->sourceArea())
 	{
-		auto TargetArea = d->TabReorderArea.data();
+		auto TargetArea = d->TabReorderArea;
 		const int TargetIndex = d->TabReorderIndex;
 		d->clearTabReorderPreview();
+		// The destination may have changed without another mouse move. Keep
+		// the previewed insertion slot, but recheck acceptance before mutation.
+		if (!TargetArea || !TargetArea->isVisible()
+		 || TargetArea->titleBar()->isHidden()
+		 || !TargetArea->allowedAreas().testFlag(CenterDockWidgetArea)
+		 || !TargetArea->dockContainer()
+		 || TargetArea->dockContainer() != d->DropContainer
+		 || !d->DockManager->dropOverlaysEnabled())
+		{
+			d->cancelDragging();
+			return;
+		}
 		cleanupAutoHideContainerWidget(CenterDockWidgetArea);
 		TargetArea->dockContainer()->dropWidget(d->Content,
 			CenterDockWidgetArea, TargetArea, TargetIndex);
+		d->Canceled = true;
 		close();
 		d->DockManager->containerOverlay()->hideOverlay();
 		d->DockManager->dockAreaOverlay()->hideOverlay();
@@ -805,6 +863,7 @@ void CFloatingDragPreview::finishDragging()
 		d->createFloatingWidget();
 	}
 
+	d->Canceled = true;
 	this->close();
 	d->DockManager->containerOverlay()->hideOverlay();
 	d->DockManager->dockAreaOverlay()->hideOverlay();
@@ -814,8 +873,12 @@ void CFloatingDragPreview::finishDragging()
 //============================================================================
 void CFloatingDragPreview::cleanupAutoHideContainerWidget(DockWidgetArea ContainerDropArea)
 {
-	auto DroppedDockWidget = qobject_cast<CDockWidget*>(d->Content);
-	auto DroppedArea = qobject_cast<CDockAreaWidget*>(d->Content);
+	auto DroppedDockWidget = qobject_cast<CDockWidget*>(d->Content.data());
+	auto DroppedArea = qobject_cast<CDockAreaWidget*>(d->Content.data());
+	if (!DroppedDockWidget && !DroppedArea)
+	{
+		return;
+	}
 	auto AutoHideContainer = DroppedDockWidget
 		? DroppedDockWidget->autoHideDockContainer()
 		: DroppedArea->autoHideDockContainer();

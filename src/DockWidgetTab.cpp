@@ -204,10 +204,17 @@ struct DockWidgetTabPrivate
 		else
 		{
 			auto w = new CFloatingDragPreview(Widget);
-			_this->connect(w, &CFloatingDragPreview::draggingCanceled, [this]()
+			const auto ResetDrag = [this, w]()
 			{
-				DragState = DraggingInactive;
-			});
+				if (FloatingWidget == w)
+				{
+					FloatingWidget = nullptr;
+					DragState = DraggingInactive;
+				}
+			};
+			_this->connect(w, &CFloatingDragPreview::draggingCanceled,
+				_this, ResetDrag);
+			_this->connect(w, &QObject::destroyed, _this, ResetDrag);
 			return w;
 		}
 	}
