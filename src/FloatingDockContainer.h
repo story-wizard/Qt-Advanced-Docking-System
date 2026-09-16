@@ -274,11 +274,11 @@ public:
 	/**
 	 * Call this function to start dragging the floating widget
 	 */
-    void startDragging(const QPoint& DragStartMousePos, const QSize& Size,
-        QWidget* MouseEventHandler)
-	{
-        startFloating(DragStartMousePos, Size, DraggingFloatingWidget, MouseEventHandler);
-	}
+	    void startDragging(const QPoint& DragStartMousePos, const QSize& Size,
+	        QWidget* MouseEventHandler)
+	    {
+	        startFloating(DragStartMousePos, Size, DraggingMousePressed, MouseEventHandler);
+	    }
 
 	/**
 	 * Starts a compositor driven drag of the given floating widget on

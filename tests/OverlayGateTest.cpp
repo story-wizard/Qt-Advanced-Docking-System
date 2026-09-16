@@ -37,6 +37,10 @@ public:
 	ConfigRestorer()
 		: Flags(CDockManager::configFlags())
 		, EdgeMargin(CDockManager::halfPanelContainerEdgeMargin())
+		, StartDragDistanceMultiplier(
+			CDockManager::startDragDistanceMultiplier())
+		, FloatingWindowDockDistanceMultiplier(
+			CDockManager::floatingWindowDockDistanceMultiplier())
 	{
 	}
 
@@ -44,12 +48,50 @@ public:
 	{
 		CDockManager::setConfigFlags(Flags);
 		CDockManager::setHalfPanelContainerEdgeMargin(EdgeMargin);
+		CDockManager::setStartDragDistanceMultiplier(
+			StartDragDistanceMultiplier);
+		CDockManager::setFloatingWindowDockDistanceMultiplier(
+			FloatingWindowDockDistanceMultiplier);
 	}
 
 private:
 	CDockManager::ConfigFlags Flags;
 	int EdgeMargin;
+	qreal StartDragDistanceMultiplier;
+	qreal FloatingWindowDockDistanceMultiplier;
 };
+
+class FloatingDragStartCounter : public QObject
+{
+public:
+	int Count = 0;
+
+protected:
+	bool eventFilter(QObject* Watched, QEvent* Event) override
+	{
+		Q_UNUSED(Watched)
+		if (Event->type() == internal::FloatingWidgetDragStartEvent)
+		{
+			++Count;
+		}
+		return false;
+	}
+};
+
+void sendNonClientMouseEvent(QWidget* Target, QEvent::Type Type,
+	Qt::MouseButton Button, Qt::MouseButtons Buttons)
+{
+	const QPoint LocalPos(4, 4);
+	const QPoint GlobalPos = Target->mapToGlobal(LocalPos);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+	QMouseEvent Event(Type, QPointF(LocalPos), QPointF(GlobalPos), Button,
+		Buttons, Qt::NoModifier);
+#else
+	QMouseEvent Event(Type, LocalPos, GlobalPos, Button, Buttons,
+		Qt::NoModifier);
+#endif
+	QApplication::sendEvent(Target, &Event);
+}
 
 }
 
@@ -70,6 +112,9 @@ class OverlayGateTest : public QObject
 private slots:
 	void startDragDistance_defaultsToTwiceApplicationThreshold();
 	void startDragDistance_usesConfiguredMultiplier();
+	void floatingWindowDockDistance_defaultsToTwiceApplicationThreshold();
+	void floatingWindowDockDistance_usesConfiguredMultiplier();
+	void floatingWindowDocking_waitsForActivationDistance();
 	void dropOverlaysEnabled_defaultsToTrue();
 	void setDropOverlaysEnabled_roundtrips();
 	void setDropOverlaysEnabled_equalValueIsNoOp();
@@ -95,6 +140,86 @@ void OverlayGateTest::startDragDistance_usesConfiguredMultiplier()
 		qRound(QApplication::startDragDistance() * 1.25));
 
 	CDockManager::setStartDragDistanceMultiplier(2.0);
+}
+
+void OverlayGateTest::floatingWindowDockDistance_defaultsToTwiceApplicationThreshold()
+{
+	QCOMPARE(CDockManager::floatingWindowDockDistanceMultiplier(), qreal(2.0));
+	QCOMPARE(CDockManager::floatingWindowDockDistance(),
+		QApplication::startDragDistance() * 2);
+}
+
+void OverlayGateTest::floatingWindowDockDistance_usesConfiguredMultiplier()
+{
+	ConfigRestorer RestoreConfig;
+	CDockManager::setFloatingWindowDockDistanceMultiplier(1.25);
+	QCOMPARE(CDockManager::floatingWindowDockDistanceMultiplier(), qreal(1.25));
+	QCOMPARE(CDockManager::floatingWindowDockDistance(),
+		qRound(QApplication::startDragDistance() * 1.25));
+
+	CDockManager::setFloatingWindowDockDistanceMultiplier(0.0);
+	QCOMPARE(CDockManager::floatingWindowDockDistanceMultiplier(), qreal(1.25));
+}
+
+void OverlayGateTest::floatingWindowDocking_waitsForActivationDistance()
+{
+#ifndef Q_OS_MACOS
+	QSKIP("native floating-window threshold integration is macOS-specific");
+#else
+	ConfigRestorer RestoreConfig;
+	CDockManager::setFloatingWindowDockDistanceMultiplier(2.0);
+
+	TestDockManager Manager;
+	Manager.resize(600, 400);
+	Manager.show();
+	CFloatingDockContainer Floating(&Manager);
+	Floating.resize(320, 220);
+	Floating.show();
+	QApplication::processEvents();
+	Floating.move(500, 300);
+	QApplication::processEvents();
+
+	FloatingDragStartCounter Counter;
+	Floating.installEventFilter(&Counter);
+	const int Threshold = CDockManager::floatingWindowDockDistance();
+	const QPoint StartPosition = Floating.pos();
+
+	// Releasing after a small native-window move must not arm docking, and the
+	// pending state must be cleared so later programmatic movement is harmless.
+	sendNonClientMouseEvent(&Floating,
+		QEvent::NonClientAreaMouseButtonPress,
+		Qt::LeftButton, Qt::LeftButton);
+	Floating.move(StartPosition + QPoint(Threshold - 1, 0));
+	QApplication::processEvents();
+	QCOMPARE(Counter.Count, 0);
+	QVERIFY(!Floating.isDraggingActive());
+	sendNonClientMouseEvent(&Floating,
+		QEvent::NonClientAreaMouseButtonRelease,
+		Qt::LeftButton, Qt::NoButton);
+	Floating.move(StartPosition + QPoint(Threshold + 8, 0));
+	QApplication::processEvents();
+	QCOMPARE(Counter.Count, 0);
+	QVERIFY(!Floating.isDraggingActive());
+
+	// A new gesture arms at the exact radial threshold and remains active when
+	// the window moves back toward its origin.
+	const QPoint SecondStartPosition = Floating.pos();
+	sendNonClientMouseEvent(&Floating,
+		QEvent::NonClientAreaMouseButtonPress,
+		Qt::LeftButton, Qt::LeftButton);
+	Floating.move(SecondStartPosition + QPoint(Threshold, 0));
+	QApplication::processEvents();
+	QCOMPARE(Counter.Count, 1);
+	QVERIFY(Floating.isDraggingActive());
+	Floating.move(SecondStartPosition + QPoint(1, 0));
+	QApplication::processEvents();
+	QCOMPARE(Counter.Count, 1);
+	QVERIFY(Floating.isDraggingActive());
+	sendNonClientMouseEvent(&Floating,
+		QEvent::NonClientAreaMouseButtonRelease,
+		Qt::LeftButton, Qt::NoButton);
+	QVERIFY(!Floating.isDraggingActive());
+#endif
 }
 
 void OverlayGateTest::dropOverlaysEnabled_defaultsToTrue()

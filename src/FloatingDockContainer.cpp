@@ -409,6 +409,11 @@ struct FloatingDockContainerPrivate
 
 	void titleMouseReleaseEvent();
 	void updateDropOverlays(const QPoint &GlobalPos);
+	QPoint floatingWindowFramePosition() const;
+	bool floatingWindowDockDistanceReached(
+		const QPoint& CurrentWindowPosition) const;
+	bool activateFloatingWindowDockingIfReady(
+		const QPoint& CurrentWindowPosition, const QPoint& GlobalPos);
 
 	/**
 	 * Returns true if the given config flag is set
@@ -531,7 +536,18 @@ FloatingDockContainerPrivate::FloatingDockContainerPrivate(
 //============================================================================
 void FloatingDockContainerPrivate::titleMouseReleaseEvent()
 {
+	const bool DockingWasActive = isState(DraggingFloatingWidget);
 	setState(DraggingInactive);
+	if (!DockingWasActive)
+	{
+		DropContainer = nullptr;
+		if (DockManager)
+		{
+			DockManager->containerOverlay()->hideOverlay();
+			DockManager->dockAreaOverlay()->hideOverlay();
+		}
+		return;
+	}
 	if (!DockManager || !DockManager->dropOverlaysEnabled())
 	{
 		if (DockManager)
@@ -591,6 +607,45 @@ void FloatingDockContainerPrivate::titleMouseReleaseEvent()
 
 	OriginalDockManager->containerOverlay()->hideOverlay();
 	OriginalDockManager->dockAreaOverlay()->hideOverlay();
+}
+
+
+//============================================================================
+QPoint FloatingDockContainerPrivate::floatingWindowFramePosition() const
+{
+	// Native move notifications report the outer window-frame position, while
+	// QWidget::pos() / QMoveEvent::pos() may use the client geometry on a
+	// decorated top-level window. Mixing those spaces makes the title-bar
+	// height look like drag movement and can arm docking on the first move.
+	return _this->frameGeometry().topLeft();
+}
+
+
+//============================================================================
+bool FloatingDockContainerPrivate::floatingWindowDockDistanceReached(
+	const QPoint& CurrentWindowPosition) const
+{
+	const QPoint Delta = CurrentWindowPosition - DragStartPos;
+	const qint64 DeltaX = Delta.x();
+	const qint64 DeltaY = Delta.y();
+	const qint64 Threshold = CDockManager::floatingWindowDockDistance();
+	return DeltaX * DeltaX + DeltaY * DeltaY >= Threshold * Threshold;
+}
+
+
+//============================================================================
+bool FloatingDockContainerPrivate::activateFloatingWindowDockingIfReady(
+	const QPoint& CurrentWindowPosition, const QPoint& GlobalPos)
+{
+	if (!isState(DraggingMousePressed)
+	 || !floatingWindowDockDistanceReached(CurrentWindowPosition))
+	{
+		return false;
+	}
+
+	setState(DraggingFloatingWidget);
+	updateDropOverlays(GlobalPos);
+	return true;
 }
 
 
@@ -946,10 +1001,10 @@ void CFloatingDockContainer::changeEvent(QEvent *event)
 			d->zOrderIndex = ++zOrderCounterFloating;
 
 #if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
-			if (d->DraggingState == DraggingFloatingWidget)
+			if (d->DraggingState == DraggingFloatingWidget
+			 || d->DraggingState == DraggingMousePressed)
 			{
 				d->titleMouseReleaseEvent();
-				d->DraggingState = DraggingInactive;
 			}
 #endif
 		}
@@ -997,7 +1052,16 @@ bool CFloatingDockContainer::nativeEvent(const QByteArray &eventType, void *mess
 	{
 		case WM_MOVING:
 		{
-			if (d->isState(DraggingFloatingWidget))
+			if (d->isState(DraggingMousePressed))
+			{
+				auto Rect = reinterpret_cast<RECT*>(msg->lParam);
+				if (Rect)
+				{
+					d->activateFloatingWindowDockingIfReady(
+						QPoint(Rect->left, Rect->top), QCursor::pos());
+				}
+			}
+			else if (d->isState(DraggingFloatingWidget))
 			{
 				d->updateDropOverlays(QCursor::pos());
 			}
@@ -1008,7 +1072,7 @@ bool CFloatingDockContainer::nativeEvent(const QByteArray &eventType, void *mess
 			 if (msg->wParam == HTCAPTION && d->isState(DraggingInactive))
 			 {
 				ADS_PRINT("CFloatingDockContainer::nativeEvent WM_NCLBUTTONDOWN");
-				d->DragStartPos = pos();
+				d->DragStartPos = d->floatingWindowFramePosition();
 				d->setState(DraggingMousePressed);
 			 }
 			 break;
@@ -1018,16 +1082,12 @@ bool CFloatingDockContainer::nativeEvent(const QByteArray &eventType, void *mess
 			 break;
 
 		case WM_ENTERSIZEMOVE:
-			 if (d->isState(DraggingMousePressed))
-			 {
-				ADS_PRINT("CFloatingDockContainer::nativeEvent WM_ENTERSIZEMOVE");
-				d->setState(DraggingFloatingWidget);
-				d->updateDropOverlays(QCursor::pos());
-			 }
+			 ADS_PRINT("CFloatingDockContainer::nativeEvent WM_ENTERSIZEMOVE");
 			 break;
 
 		case WM_EXITSIZEMOVE:
-			 if (d->isState(DraggingFloatingWidget))
+			 if (d->isState(DraggingFloatingWidget)
+			  || d->isState(DraggingMousePressed))
 			 {
 				ADS_PRINT("CFloatingDockContainer::nativeEvent WM_EXITSIZEMOVE");
 				if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
@@ -1157,13 +1217,18 @@ void CFloatingDockContainer::startFloating(const QPoint &DragStartMousePos,
     const QSize &Size, eDragState DragState, QWidget *MouseEventHandler)
 {
 #if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
-    if (!isMaximized())
-    {
+	if (!isMaximized())
+	{
 		resize(Size);
 		d->DragStartMousePosition = DragStartMousePos;
-    }
+	}
+	if (DraggingMousePressed == DragState)
+	{
+		d->DragStartPos = d->floatingWindowFramePosition();
+	}
 	d->setState(DragState);
-	if (DraggingFloatingWidget == DragState)
+	if (DraggingFloatingWidget == DragState
+	 || DraggingMousePressed == DragState)
 	{
 		d->MouseEventHandler = MouseEventHandler;
 		if (d->MouseEventHandler)
@@ -1178,9 +1243,13 @@ void CFloatingDockContainer::startFloating(const QPoint &DragStartMousePos,
 	}
 	show();
 #else
-    Q_UNUSED(MouseEventHandler)
+	Q_UNUSED(MouseEventHandler)
 	resize(Size);
 	d->DragStartMousePosition = DragStartMousePos;
+	if (DraggingMousePressed == DragState)
+	{
+		d->DragStartPos = d->floatingWindowFramePosition();
+	}
 	d->setState(DragState);
 	moveFloating();
 	show();
@@ -1197,8 +1266,8 @@ void CFloatingDockContainer::moveFloating()
 	switch (d->DraggingState)
 	{
 	case DraggingMousePressed:
-		d->setState(DraggingFloatingWidget);
-		d->updateDropOverlays(QCursor::pos());
+		d->activateFloatingWindowDockingIfReady(
+			d->floatingWindowFramePosition(), QCursor::pos());
 		break;
 
 	case DraggingFloatingWidget:
@@ -1649,7 +1718,7 @@ bool CFloatingDockContainer::event(QEvent *e)
 #endif
 		{
 			ADS_PRINT("FloatingWidget::event Event::NonClientAreaMouseButtonPress" << e->type());
-			d->DragStartPos = pos();
+			d->DragStartPos = d->floatingWindowFramePosition();
 			d->setState(DraggingMousePressed);
 		}
 	}
@@ -1658,6 +1727,10 @@ bool CFloatingDockContainer::event(QEvent *e)
 	case DraggingMousePressed:
 		switch (e->type())
 		{
+		case QEvent::NonClientAreaMouseButtonRelease:
+			d->titleMouseReleaseEvent();
+			break;
+
 		case QEvent::NonClientAreaMouseButtonDblClick:
 			ADS_PRINT("FloatingWidget::event QEvent::NonClientAreaMouseButtonDblClick");
 			d->setState(DraggingInactive);
@@ -1709,8 +1782,8 @@ void CFloatingDockContainer::moveEvent(QMoveEvent *event)
 	switch (d->DraggingState)
 	{
 	case DraggingMousePressed:
-		d->setState(DraggingFloatingWidget);
-		d->updateDropOverlays(QCursor::pos());
+		d->activateFloatingWindowDockingIfReady(
+			d->floatingWindowFramePosition(), QCursor::pos());
 		break;
 
 	case DraggingFloatingWidget:
@@ -1809,11 +1882,20 @@ void CFloatingDockContainer::moveEvent(QMoveEvent *event)
 	// compositor does not report window moves, so the docking via window
 	// moves cannot work. Floating widgets are docked via the platform drag
 	// and drop implemented in CDockContainerWidget instead
-    if (!d->IsResizing && event->spontaneous() && d->MousePressed
-     && !internal::isWayland())
+	if (!d->IsResizing && event->spontaneous() && d->MousePressed
+	 && !internal::isWayland())
 	{
-        d->setState(DraggingFloatingWidget);
-		d->updateDropOverlays(QCursor::pos());
+		if (d->isState(DraggingInactive))
+		{
+			d->DragStartPos = event->oldPos();
+			d->setState(DraggingMousePressed);
+		}
+		if (!d->activateFloatingWindowDockingIfReady(
+			event->pos(), QCursor::pos())
+		 && d->isState(DraggingFloatingWidget))
+		{
+			d->updateDropOverlays(QCursor::pos());
+		}
 	}
 	d->IsResizing = false;
 }
