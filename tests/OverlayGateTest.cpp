@@ -9,6 +9,11 @@
 #include <QtTest/QtTest>
 
 #include <QLabel>
+#include <QtMath>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 #include "DockAreaTitleBar.h"
 #include "DockAreaWidget.h"
@@ -93,6 +98,15 @@ void sendNonClientMouseEvent(QWidget* Target, QEvent::Type Type,
 	QApplication::sendEvent(Target, &Event);
 }
 
+#ifdef Q_OS_WIN
+class TestFloatingDockContainer : public CFloatingDockContainer
+{
+public:
+	using CFloatingDockContainer::CFloatingDockContainer;
+	using CFloatingDockContainer::nativeEvent;
+};
+#endif
+
 }
 
 class TestDockManager : public CDockManager
@@ -114,7 +128,12 @@ private slots:
 	void startDragDistance_usesConfiguredMultiplier();
 	void floatingWindowDockDistance_defaultsToTwiceApplicationThreshold();
 	void floatingWindowDockDistance_usesConfiguredMultiplier();
+	void floatingWindowDockDistance_nativeCoordinateScale_data();
+	void floatingWindowDockDistance_nativeCoordinateScale();
 	void floatingWindowDocking_waitsForActivationDistance();
+#ifdef Q_OS_WIN
+	void floatingWindowDocking_nativeWindowsMessagesUseFramePixels();
+#endif
 	void dropOverlaysEnabled_defaultsToTrue();
 	void setDropOverlaysEnabled_roundtrips();
 	void setDropOverlaysEnabled_equalValueIsNoOp();
@@ -159,6 +178,41 @@ void OverlayGateTest::floatingWindowDockDistance_usesConfiguredMultiplier()
 
 	CDockManager::setFloatingWindowDockDistanceMultiplier(0.0);
 	QCOMPARE(CDockManager::floatingWindowDockDistanceMultiplier(), qreal(1.25));
+}
+
+void OverlayGateTest::floatingWindowDockDistance_nativeCoordinateScale_data()
+{
+	QTest::addColumn<qreal>("coordinateScale");
+	QTest::newRow("100-percent") << qreal(1.0);
+	QTest::newRow("125-percent") << qreal(1.25);
+	QTest::newRow("150-percent") << qreal(1.5);
+	QTest::newRow("200-percent") << qreal(2.0);
+	QTest::newRow("300-percent") << qreal(3.0);
+}
+
+void OverlayGateTest::floatingWindowDockDistance_nativeCoordinateScale()
+{
+	QFETCH(qreal, coordinateScale);
+	const int LogicalDistance = 40;
+	const int NativeDistance = qRound(LogicalDistance * coordinateScale);
+	// Non-zero/negative native origins must not contribute to the drag distance.
+	const QPoint StartPosition(qRound(1200 * coordinateScale),
+		qRound(-400 * coordinateScale));
+	auto Reached = [&](const QPoint& Delta)
+	{
+		return internal::floatingWindowDockDistanceReached(StartPosition,
+			StartPosition + Delta, LogicalDistance, coordinateScale);
+	};
+	QVERIFY(!Reached(QPoint()));
+	QVERIFY(!Reached(QPoint(NativeDistance - 1, 0)));
+	QVERIFY(Reached(QPoint(NativeDistance, 0)));
+	QVERIFY(!Reached(QPoint(0, -NativeDistance + 1)));
+	QVERIFY(Reached(QPoint(0, -NativeDistance)));
+	// Radial activation, rather than Manhattan distance, also scales correctly.
+	QVERIFY(!Reached(QPoint(qRound(24 * coordinateScale),
+		qRound(32 * coordinateScale) - 1)));
+	QVERIFY(Reached(QPoint(qRound(24 * coordinateScale),
+		qRound(32 * coordinateScale))));
 }
 
 void OverlayGateTest::floatingWindowDocking_waitsForActivationDistance()
@@ -221,6 +275,63 @@ void OverlayGateTest::floatingWindowDocking_waitsForActivationDistance()
 	QVERIFY(!Floating.isDraggingActive());
 #endif
 }
+
+#ifdef Q_OS_WIN
+void OverlayGateTest::floatingWindowDocking_nativeWindowsMessagesUseFramePixels()
+{
+	// Run with QT_SCALE_FACTOR=2 as well to catch native/logical origin mixing.
+	if (QGuiApplication::platformName() != QStringLiteral("windows"))
+	{
+		QSKIP("native HWND integration requires the Windows platform plugin");
+	}
+	ConfigRestorer RestoreConfig;
+	CDockManager::setFloatingWindowDockDistanceMultiplier(3.0);
+	CDockManager Manager;
+	TestFloatingDockContainer Floating(&Manager);
+	Floating.resize(320, 220);
+	Floating.move(500, 300);
+	Floating.show();
+	QApplication::processEvents();
+	const HWND Window = reinterpret_cast<HWND>(Floating.winId());
+	RECT FrameRect;
+	QVERIFY(GetWindowRect(Window, &FrameRect));
+	const int NativeDistance = qCeil(
+		CDockManager::floatingWindowDockDistance() * Floating.devicePixelRatioF());
+	FloatingDragStartCounter Counter;
+	Floating.installEventFilter(&Counter);
+	auto DispatchNativeMessage = [&](UINT Type, WPARAM WParam, LPARAM LParam)
+	{
+		MSG Message = {};
+		Message.hwnd = Window;
+		Message.message = Type;
+		Message.wParam = WParam;
+		Message.lParam = LParam;
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+		long Result = 0;
+#else
+		qintptr Result = 0;
+#endif
+		Floating.nativeEvent(QByteArrayLiteral("windows_generic_MSG"),
+			&Message, &Result);
+		QApplication::processEvents();
+	};
+	DispatchNativeMessage(WM_NCLBUTTONDOWN, HTCAPTION, 0);
+	RECT MovedRect = FrameRect;
+	OffsetRect(&MovedRect, NativeDistance - 1, 0);
+	DispatchNativeMessage(WM_MOVING, 0, reinterpret_cast<LPARAM>(&MovedRect));
+	QCOMPARE(Counter.Count, 0);
+	QVERIFY(!Floating.isDraggingActive());
+	OffsetRect(&MovedRect, 1, 0);
+	DispatchNativeMessage(WM_MOVING, 0, reinterpret_cast<LPARAM>(&MovedRect));
+	QCOMPARE(Counter.Count, 1);
+	QVERIFY(Floating.isDraggingActive());
+	MovedRect = FrameRect;
+	DispatchNativeMessage(WM_MOVING, 0, reinterpret_cast<LPARAM>(&MovedRect));
+	QVERIFY(Floating.isDraggingActive());
+	DispatchNativeMessage(WM_EXITSIZEMOVE, 0, 0);
+	QVERIFY(!Floating.isDraggingActive());
+}
+#endif
 
 void OverlayGateTest::dropOverlaysEnabled_defaultsToTrue()
 {

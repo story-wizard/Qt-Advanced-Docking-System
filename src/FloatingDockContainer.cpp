@@ -389,6 +389,7 @@ struct FloatingDockContainerPrivate
 	CDockContainerWidget *DropContainer = nullptr;
 	CDockAreaWidget *SingleDockArea = nullptr;
 	QPoint DragStartPos;
+	qreal DragStartCoordinateScale = 1.0;
 	bool Hiding = false;
 	bool AutoHideChildren = true;
 	bool HideContentOnNextHide = false;
@@ -443,6 +444,10 @@ struct FloatingDockContainerPrivate
 		}
 
 		DraggingState = StateId;
+		if (DraggingInactive == DraggingState)
+		{
+			DragStartCoordinateScale = 1.0;
+		}
 #ifdef Q_OS_MACOS
 		if (DraggingFloatingWidget == DraggingState)
 		{
@@ -625,11 +630,9 @@ QPoint FloatingDockContainerPrivate::floatingWindowFramePosition() const
 bool FloatingDockContainerPrivate::floatingWindowDockDistanceReached(
 	const QPoint& CurrentWindowPosition) const
 {
-	const QPoint Delta = CurrentWindowPosition - DragStartPos;
-	const qint64 DeltaX = Delta.x();
-	const qint64 DeltaY = Delta.y();
-	const qint64 Threshold = CDockManager::floatingWindowDockDistance();
-	return DeltaX * DeltaX + DeltaY * DeltaY >= Threshold * Threshold;
+	return internal::floatingWindowDockDistanceReached(DragStartPos,
+		CurrentWindowPosition, CDockManager::floatingWindowDockDistance(),
+		DragStartCoordinateScale);
 }
 
 
@@ -1072,8 +1075,16 @@ bool CFloatingDockContainer::nativeEvent(const QByteArray &eventType, void *mess
 			 if (msg->wParam == HTCAPTION && d->isState(DraggingInactive))
 			 {
 				ADS_PRINT("CFloatingDockContainer::nativeEvent WM_NCLBUTTONDOWN");
-				d->DragStartPos = d->floatingWindowFramePosition();
-				d->setState(DraggingMousePressed);
+				RECT FrameRect;
+				if (GetWindowRect(msg->hwnd, &FrameRect))
+				{
+					// WM_MOVING reports native pixels. Capture the baseline in
+					// the same space and scale Qt's logical-pixel distance once
+					// at press time, including on non-primary/scaled monitors.
+					d->DragStartPos = QPoint(FrameRect.left, FrameRect.top);
+					d->DragStartCoordinateScale = devicePixelRatioF();
+					d->setState(DraggingMousePressed);
+				}
 			 }
 			 break;
 
