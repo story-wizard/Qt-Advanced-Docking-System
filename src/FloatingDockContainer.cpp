@@ -1085,6 +1085,13 @@ bool CFloatingDockContainer::nativeEvent(const QByteArray &eventType, void *mess
 					d->DragStartCoordinateScale = devicePixelRatioF();
 					d->setState(DraggingMousePressed);
 				}
+				else
+				{
+					// Do not substitute Qt's logical coordinates for a native
+					// frame baseline: that could activate docking immediately.
+					qWarning("QtADS: GetWindowRect failed (%lu); docking is "
+						"disabled for this window drag.", GetLastError());
+				}
 			 }
 			 break;
 

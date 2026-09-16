@@ -473,6 +473,14 @@ void OverlayGateTest::topHeader_doesNotBeatExplicitContainerIndicator()
 	QVERIFY(!TestDockManager::dockAreaHeaderHasDropPriority(TargetArea,
 		HeaderPos, CenterDockWidgetArea, TopDockWidgetArea,
 		TopDockWidgetArea));
+	// AutoHide sidebar hit zones are intentional targets, not split-edge
+	// fallbacks, even when the cursor is not over an indicator glyph.
+	for (auto Area : {LeftAutoHideArea, RightAutoHideArea,
+		TopAutoHideArea, BottomAutoHideArea})
+	{
+		QVERIFY(!TestDockManager::dockAreaHeaderHasDropPriority(TargetArea,
+			HeaderPos, CenterDockWidgetArea, Area, InvalidDockWidgetArea));
+	}
 }
 
 void OverlayGateTest::dragCancelEvent_isRegisteredAndDistinct()
