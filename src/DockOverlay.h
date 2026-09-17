@@ -40,6 +40,7 @@
 #include "ads_globals.h"
 
 QT_FORWARD_DECLARE_CLASS(QGridLayout)
+QT_FORWARD_DECLARE_CLASS(QPixmap)
 
 namespace ads
 {
@@ -106,6 +107,21 @@ public:
 	DockWidgetArea dropAreaUnderCursor(const QPoint& GlobalPos) const;
 
 	/**
+	 * Returns only the explicit drop-indicator area under the current cursor.
+	 * Unlike dropAreaUnderCursor(), this does not include forgiving edge or
+	 * quadrant fall-through targets.
+	 */
+	DockWidgetArea dropIndicatorAreaUnderCursor() const;
+
+	/**
+	 * Returns only the explicit drop-indicator area under the given global
+	 * position. This lets callers distinguish an intentional glyph hit from a
+	 * forgiving fallback target.
+	 */
+	DockWidgetArea dropIndicatorAreaUnderCursor(
+		const QPoint& GlobalPos) const;
+
+	/**
 	 * If the drop area is the CenterDockWidgetArea or a sidebar area,
 	 * then this function returns the index of the tab under cursor.
 	 * Call this function after call to dropAreaUnderCursor() because this
@@ -145,6 +161,25 @@ public:
 	 * Hides the overlay
 	 */
 	void hideOverlay();
+
+	/**
+	 * [Wizard NLE fork] Shows the dragged panel header above this overlay's
+	 * translucent drop preview without creating another native drag window.
+	 */
+	bool setDragPreviewHeader(const QPixmap& Pixmap,
+		const QPoint& GlobalTopLeft);
+
+	/**
+	 * Shows the drop target as a highlight-colored outline without the normal
+	 * translucent fill or docking indicators. Used when a dragged tab is
+	 * already locked into a destination header.
+	 */
+	void setDropPreviewOutlineOnly(bool OutlineOnly);
+
+	/**
+	 * Returns true if the current drop preview is rendered as an outline only.
+	 */
+	bool dropPreviewOutlineOnly() const;
 
 	/**
 	 * Enables / disables the semi transparent overlay rectangle that represents

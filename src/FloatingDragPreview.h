@@ -115,6 +115,15 @@ public: // implements IFloatingWidget -----------------------------------------
 	void cancelDraggingSilently();
 
 	/**
+	 * [Wizard NLE fork] Completes a tab drag handoff when the cursor returns to
+	 * its source dock-area header. A foreign header remains a preview-only
+	 * target until mouse release, so panel ownership and ordering do not change
+	 * early.
+	 * Returns true when a source-header handoff was available.
+	 */
+	bool finishDraggingToSourceTabBar();
+
+	/**
 	 * Finishes dragging.
 	 * Hides the dock overlays and executes the real undocking and docking
 	 * of the assigned Content widget

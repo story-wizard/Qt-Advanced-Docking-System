@@ -793,6 +793,35 @@ public:
 	static int startDragDistance();
 
 	/**
+	 * Returns the multiplier applied to QApplication::startDragDistance().
+	 */
+	static qreal startDragDistanceMultiplier();
+
+	/**
+	 * Sets the multiplier applied to QApplication::startDragDistance().
+	 * Non-finite and non-positive values are ignored.
+	 */
+	static void setStartDragDistanceMultiplier(qreal Multiplier);
+
+	/**
+	 * Returns the distance a floating window must move before docking overlays
+	 * and drop handling become active. Window movement itself is not delayed.
+	 */
+	static int floatingWindowDockDistance();
+
+	/**
+	 * Returns the multiplier applied to QApplication::startDragDistance() for
+	 * floating-window docking activation.
+	 */
+	static qreal floatingWindowDockDistanceMultiplier();
+
+	/**
+	 * Sets the multiplier used for floating-window docking activation.
+	 * Non-finite and non-positive values are ignored.
+	 */
+	static void setFloatingWindowDockDistanceMultiplier(qreal Multiplier);
+
+	/**
 	 * Helper function to set focus depending on the configuration of the
 	 * FocusStyling flag
 	 */

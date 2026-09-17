@@ -68,6 +68,7 @@ struct DockWidgetTabPrivate
 	tTabLabel* TitleLabel;
 	QPoint GlobalDragStartMousePosition;
 	QPoint DragStartMousePosition;
+	int LastDragMouseX = 0;
 	bool IsActiveTab = false;
 	CDockAreaWidget* DockArea = nullptr;
 	eDragState DragState = DraggingInactive;
@@ -110,12 +111,38 @@ struct DockWidgetTabPrivate
 	bool startFloating(eDragState DraggingState = DraggingFloatingWidget);
 
 	/**
+	 * Returns the visible source panel size for a tab detached from a
+	 * multi-tab area. Inactive dock widgets are removed from the area layout,
+	 * so their own size may still be a construction default or a geometry from
+	 * the last time they were active.
+	 */
+	QSize dockWidgetDragPreviewSize() const
+	{
+		if (DockArea)
+		{
+			const QSize ContentAreaSize =
+				DockArea->contentAreaGeometry().size();
+			if (!ContentAreaSize.isEmpty())
+			{
+				return ContentAreaSize;
+			}
+		}
+		return DockWidget ? DockWidget->size() : QSize();
+	}
+
+	/**
 	 * Wayland hybrid drag: drive the in-window drag preview from reliable
 	 * event coordinates and, when the cursor leaves the source top-level
 	 * window, convert the in-window drag into a native compositor platform
 	 * drag.
 	 */
 	void waylandPreviewMove(QMouseEvent* ev);
+
+	/**
+	 * Ends the floating-preview phase when a tab enters a dock-area header and
+	 * resumes the same gesture as an in-header tab reorder.
+	 */
+	bool tryResumeTabDrag(QMouseEvent* ev);
 
 	/**
 	 * Returns true if the given config flag is set
@@ -177,10 +204,17 @@ struct DockWidgetTabPrivate
 		else
 		{
 			auto w = new CFloatingDragPreview(Widget);
-			_this->connect(w, &CFloatingDragPreview::draggingCanceled, [this]()
+			const auto ResetDrag = [this, w]()
 			{
-				DragState = DraggingInactive;
-			});
+				if (FloatingWidget == w)
+				{
+					FloatingWidget = nullptr;
+					DragState = DraggingInactive;
+				}
+			};
+			_this->connect(w, &CFloatingDragPreview::draggingCanceled,
+				_this, ResetDrag);
+			_this->connect(w, &QObject::destroyed, _this, ResetDrag);
 			return w;
 		}
 	}
@@ -192,6 +226,7 @@ struct DockWidgetTabPrivate
 	{
 		GlobalDragStartMousePosition = GlobalPos;
 		DragStartMousePosition = _this->mapFromGlobal(GlobalPos);
+		LastDragMouseX = GlobalPos.x();
 	}
 
 	/**
@@ -295,13 +330,20 @@ void DockWidgetTabPrivate::createLayout()
 void DockWidgetTabPrivate::moveTab(QMouseEvent* ev)
 {
     ev->accept();
-    QPoint Distance = internal::globalPositionOf(ev) - GlobalDragStartMousePosition;
+	const QPoint GlobalPos = internal::globalPositionOf(ev);
+	const int DragDirection = (GlobalPos.x() > LastDragMouseX) ? 1
+		: ((GlobalPos.x() < LastDragMouseX) ? -1 : 0);
+	LastDragMouseX = GlobalPos.x();
+    QPoint Distance = GlobalPos - GlobalDragStartMousePosition;
     Distance.setY(0);
     auto TargetPos = Distance + TabDragStartPosition;
+	const int DraggedLeftX = TargetPos.x();
     TargetPos.rx() = qMax(TargetPos.x(), 0);
     TargetPos.rx() = qMin(_this->parentWidget()->rect().right() - _this->width() + 1, TargetPos.rx());
     _this->move(TargetPos);
     _this->raise();
+	Q_EMIT _this->dragged(DraggedLeftX, DragDirection,
+		TabDragStartPosition.x());
 }
 
 
@@ -352,7 +394,7 @@ bool DockWidgetTabPrivate::startFloating(eDragState DraggingState)
 	if (DockArea->dockWidgetsCount() > 1)
 	{
 		FloatingWidget = createFloatingWidget(DockWidget, CreateContainer);
-		Size = DockWidget->size();
+		Size = dockWidgetDragPreviewSize();
 	}
 	else
 	{
@@ -412,7 +454,7 @@ void DockWidgetTabPrivate::waylandPreviewMove(QMouseEvent* ev)
 	if (DockArea->dockWidgetsCount() > 1)
 	{
 		RealFloating = createFloatingWidget(DockWidget, true);
-		Size = DockWidget->size();
+		Size = dockWidgetDragPreviewSize();
 	}
 	else
 	{
@@ -421,6 +463,56 @@ void DockWidgetTabPrivate::waylandPreviewMove(QMouseEvent* ev)
 	}
 	CFloatingDockContainer::startPlatformDragForFloatingWidget(RealFloating,
 		DragStartMousePosition, Size, GlobalDragStartMousePosition, _this);
+}
+
+
+//============================================================================
+bool DockWidgetTabPrivate::tryResumeTabDrag(QMouseEvent* ev)
+{
+	if (!isDraggingState(DraggingFloatingWidget) || !FloatingWidget)
+	{
+		return false;
+	}
+
+	auto Preview = static_cast<CFloatingDragPreview*>(FloatingWidget);
+	auto PreviousDockArea = DockArea;
+	if (!Preview->finishDraggingToSourceTabBar())
+	{
+		return false;
+	}
+
+	FloatingWidget = nullptr;
+	DockArea = DockWidget->dockAreaWidget();
+	if (!DockArea)
+	{
+		DragState = DraggingInactive;
+		return true;
+	}
+
+	DragState = DraggingTab;
+	if (DockArea != PreviousDockArea)
+	{
+		if (_this->parentWidget() && _this->parentWidget()->layout())
+		{
+			_this->parentWidget()->layout()->activate();
+		}
+		TabDragStartPosition = _this->pos();
+		saveDragStartMousePosition(internal::globalPositionOf(ev));
+		if (ev->spontaneous() && QWidget::mouseGrabber() != _this)
+		{
+			_this->grabMouse();
+		}
+	}
+	else
+	{
+		// The original gesture coordinates keep the tab directly under the
+		// cursor when it returns to its own header, including after a previous
+		// horizontal reorder.
+		moveTab(ev);
+	}
+
+	_this->raise();
+	return true;
 }
 
 
@@ -456,7 +548,6 @@ void CDockWidgetTab::mousePressEvent(QMouseEvent* ev)
         	d->focusController()->setDockWidgetTabPressed(true);
         	d->focusController()->setDockWidgetTabFocused(this);
         }
-        Q_EMIT clicked();
 		return;
 	}
 	Super::mousePressEvent(ev);
@@ -476,6 +567,18 @@ void CDockWidgetTab::mouseReleaseEvent(QMouseEvent* ev)
 
 		switch (CurrentDragState)
 		{
+		case DraggingMousePressed:
+			// Treat the gesture as a click only if it never crossed a drag
+			// threshold and was released over this tab. This keeps grabbing an
+			// inactive tab for reordering or detachment from activating its
+			// potentially expensive panel content on mouse-down.
+			if (rect().contains(mapFromGlobal(internal::globalPositionOf(ev))))
+			{
+				ev->accept();
+				Q_EMIT clicked();
+			}
+			break;
+
 		case DraggingTab:
 			// End of tab moving, emit signal
 			if (d->DockArea)
@@ -492,6 +595,11 @@ void CDockWidgetTab::mouseReleaseEvent(QMouseEvent* ev)
 
 		default:
 			break;
+		}
+
+		if (QWidget::mouseGrabber() == this)
+		{
+			releaseMouse();
 		}
 
 		if (CDockManager::testConfigFlag(CDockManager::FocusHighlighting))
@@ -537,8 +645,14 @@ void CDockWidgetTab::mouseMoveEvent(QMouseEvent* ev)
         }
         else
         {
-            d->FloatingWidget->moveFloating();
+			auto Preview = static_cast<CFloatingDragPreview*>(d->FloatingWidget);
+			Preview->moveFloating(internal::globalPositionOf(ev));
         }
+		if (d->tryResumeTabDrag(ev))
+		{
+			ev->accept();
+			return;
+		}
         Super::mouseMoveEvent(ev);
         return;
     }
@@ -551,11 +665,11 @@ void CDockWidgetTab::mouseMoveEvent(QMouseEvent* ev)
     	d->moveTab(ev);
     }
 
-    auto MappedPos = mapToParent(ev->pos());
-    bool MouseOutsideBar = (MappedPos.x() < 0) || (MappedPos.x() > parentWidget()->rect().right());
-    // Maybe a fixed drag distance is better here ?
+	// Keep a tab attached to its row during horizontal movement.
+	// Pulling it vertically beyond the undock threshold is the one deliberate
+	// transition from tab reordering to a floating panel drag.
     int DragDistanceY = qAbs(d->GlobalDragStartMousePosition.y() - internal::globalPositionOf(ev).y());
-    if (DragDistanceY >= CDockManager::startDragDistance() || MouseOutsideBar)
+	if (DragDistanceY >= CDockManager::startDragDistance())
 	{
 		// If this is the last dock area in a dock container with only
     	// one single dock widget it does not make  sense to move it to a new
@@ -577,15 +691,23 @@ void CDockWidgetTab::mouseMoveEvent(QMouseEvent* ev)
 		auto Features = d->DockWidget->features();
         if (Features.testFlag(CDockWidget::DockWidgetFloatable) || (Features.testFlag(CDockWidget::DockWidgetMovable)))
         {
-        	// If we undock, we need to restore the initial position of this
-        	// tab because it looks strange if it remains on its dragged position
+			// If we undock, we need to restore the initial position of this
+			// tab because it looks strange if it remains on its dragged position
         	if (d->isDraggingState(DraggingTab))
 			{
-        		parentWidget()->layout()->update();
+				Q_EMIT moved(internal::globalPositionOf(ev));
+			}
+			else
+			{
+				d->TabDragStartPosition = pos();
 			}
             d->startFloating();
         }
     	return;
+	}
+	else if (d->isDraggingState(DraggingTab))
+	{
+		return;
 	}
     else if (d->DockArea->openDockWidgetsCount() > 1
      && (internal::globalPositionOf(ev) - d->GlobalDragStartMousePosition).manhattanLength() >= QApplication::startDragDistance()) // Wait a few pixels before start moving
@@ -595,8 +717,9 @@ void CDockWidgetTab::mouseMoveEvent(QMouseEvent* ev)
     	if (DraggingTab != d->DragState)
     	{
     		d->TabDragStartPosition = this->pos();
-    	}
+        }
         d->DragState = DraggingTab;
+		d->moveTab(ev);
 		return;
 	}
 

@@ -62,6 +62,8 @@ private Q_SLOTS:
 	void onTabClicked();
 	void onTabCloseRequested();
 	void onCloseOtherTabsRequested();
+	void onTabWidgetDragged(int DraggedLeftX, int DragDirection,
+		int DragOriginLeftX);
 	void onTabWidgetMoved(const QPoint& GlobalPos);
 
 protected:
@@ -124,6 +126,31 @@ public:
 	 * Returns the tab insertion index for the given mouse cursor position
 	 */
 	int tabInsertIndexAt(const QPoint& Pos) const;
+
+	/**
+	 * [Wizard NLE fork] Previews an external tab at an overlap-selected slot
+	 * without changing the real tab or dock-widget order. Existing tabs move
+	 * around a temporary gap one at a time using the same one-third overlap and
+	 * reverse-hysteresis behavior as an ordinary tab drag.
+	 * DraggedLeftGlobal is the dragged tab's left x-coordinate in global
+	 * logical pixels; DraggedWidth is its width in logical pixels.
+	 * DragDirection is -1 (left), 0 (stationary), or 1 (right).
+	 * Returns the destination layout insertion index, including hidden tabs.
+	 */
+	int previewExternalTabDrag(int DraggedLeftGlobal, int DraggedWidth,
+		int DragDirection);
+
+	/**
+	 * [Wizard NLE fork] Returns the width currently reserved for an external
+	 * tab insertion preview, or zero when no preview is active.
+	 */
+	int externalTabDragPreviewWidth() const;
+
+	/**
+	 * [Wizard NLE fork] Clears an external insertion preview and seats every tab
+	 * back in its unchanged layout slot.
+	 */
+	void clearExternalTabDragPreview();
 
 	/**
 	 * Filters the tab widget events
@@ -212,6 +239,13 @@ Q_SIGNALS:
 	void tabMoved(int from, int to);
 
 	/**
+	 * [Wizard NLE fork] Notifies title-bar integrations that their responsive
+	 * content budget changed for an external tab insertion preview. Width is
+	 * zero when the preview ends.
+	 */
+	void externalTabDragPreviewChanged(int width);
+
+	/**
 	 * This signal is emitted, just before the tab with the given index is
 	 * removed
 	 */
@@ -230,4 +264,3 @@ Q_SIGNALS:
 } // namespace ads
 //-----------------------------------------------------------------------------
 #endif // DockAreaTabBarH
-

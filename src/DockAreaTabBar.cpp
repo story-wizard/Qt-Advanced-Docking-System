@@ -31,12 +31,16 @@
 #include "DockAreaTabBar.h"
 
 #include <QMouseEvent>
+#include <QHash>
+#include <QPointer>
 #include <QScrollBar>
+#include <QVariantAnimation>
 #include <QDebug>
 #include <QBoxLayout>
 #include <QApplication>
 #include <QtGlobal>
 #include <QTimer>
+#include <QVector>
 
 #include "FloatingDockContainer.h"
 #include "DockAreaWidget.h"
@@ -46,10 +50,28 @@
 #include "DockWidgetTab.h"
 
 #include <iostream>
+#include <utility>
 
 
 namespace ads
 {
+namespace
+{
+constexpr int ReorderReverseHysteresis = 4;
+constexpr int ExternalPreviewMinimumVisibleTabWidth = 48;
+constexpr int TabSlideAnimationDurationMs = 85;
+
+int tabReorderBoundary(const QRect& SiblingGeometry,
+	bool SiblingPrecedesMovingTab, int MovingTabWidth)
+{
+	const int RequiredOverlap = qMax(1,
+		(SiblingGeometry.width() + 2) / 3);
+	return SiblingPrecedesMovingTab
+		? SiblingGeometry.right() - RequiredOverlap + 1
+		: SiblingGeometry.left() + RequiredOverlap - MovingTabWidth;
+}
+}
+
 /**
  * Private data class of CDockAreaTabBar class (pimpl)
  */
@@ -60,6 +82,28 @@ struct DockAreaTabBarPrivate
 	QWidget* TabsContainerWidget;
 	QBoxLayout* TabsLayout;
 	int CurrentIndex = -1;
+	QPointer<CDockWidgetTab> DraggedTab;
+	QVector<int> DragReorderBoundaries;
+	int CurrentDragRank = -1;
+	int LastReorderDirection = 0;
+	QVector<QPointer<CDockWidgetTab>> ExternalPreviewTabs;
+	QVector<int> ExternalPreviewLayoutIndices;
+	QVector<QRect> ExternalPreviewTabGeometriesGlobal;
+	QVector<int> ExternalPreviewReorderBoundariesGlobal;
+	QSpacerItem* ExternalPreviewSpacer = nullptr;
+	int ExternalPreviewContainerMinimumWidth = -1;
+	int ExternalPreviewHorizontalScroll = -1;
+	int ExternalPreviewRank = -1;
+	int ExternalPreviewLastReorderDirection = 0;
+	int ExternalPreviewWidth = 0;
+	struct TabSlide
+	{
+		QPointer<CDockWidgetTab> Tab;
+		QPoint StartPosition;
+		QPoint TargetPosition;
+	};
+	QVector<TabSlide> TabSlides;
+	QPointer<QVariantAnimation> TabSlideAnimation;
 
 	/**
 	 * Private data constructor
@@ -81,6 +125,32 @@ struct DockAreaTabBarPrivate
 	 * Convenience function to access last tab
 	 */
 	CDockWidgetTab* lastTab() const {return _this->tab(_this->count() - 1);}
+
+	/**
+	 * Moves a sibling once the dragged tab covers one third of its width.
+	 */
+	bool reorderDraggedTab(CDockWidgetTab* MovingTab, int DraggedLeftX,
+		int DragDirection, int DragOriginLeftX);
+
+	/**
+	 * Captures the current visual position of every visible tab except the
+	 * pointer-locked dragged tab.
+	 */
+	QHash<CDockWidgetTab*, QPoint> captureTabPositions(
+		CDockWidgetTab* ExcludedTab = nullptr) const;
+
+	/**
+	 * Stops in-flight visual slides at their current positions. The caller owns
+	 * the following layout mutation and will establish fresh target positions.
+	 */
+	void stopTabSlideAnimations();
+
+	/**
+	 * Animates tabs from captured visual positions to their authoritative
+	 * post-layout positions. Logical order has already changed at this point.
+	 */
+	void animateTabsFrom(
+		const QHash<CDockWidgetTab*, QPoint>& StartPositions);
 };
 // struct DockAreaTabBarPrivate
 
@@ -89,6 +159,117 @@ DockAreaTabBarPrivate::DockAreaTabBarPrivate(CDockAreaTabBar* _public) :
 	_this(_public)
 {
 
+}
+
+
+//============================================================================
+QHash<CDockWidgetTab*, QPoint>
+DockAreaTabBarPrivate::captureTabPositions(CDockWidgetTab* ExcludedTab) const
+{
+	QHash<CDockWidgetTab*, QPoint> Positions;
+	for (int i = 0; i < _this->count(); ++i)
+	{
+		auto Tab = _this->tab(i);
+		if (!Tab || Tab == ExcludedTab || !Tab->isVisibleTo(_this))
+		{
+			continue;
+		}
+		Positions.insert(Tab, Tab->pos());
+	}
+	return Positions;
+}
+
+
+//============================================================================
+void DockAreaTabBarPrivate::stopTabSlideAnimations()
+{
+	auto Animation = TabSlideAnimation;
+	TabSlideAnimation = nullptr;
+	TabSlides.clear();
+	if (Animation)
+	{
+		Animation->stop();
+		Animation->deleteLater();
+	}
+}
+
+
+//============================================================================
+void DockAreaTabBarPrivate::animateTabsFrom(
+	const QHash<CDockWidgetTab*, QPoint>& StartPositions)
+{
+	QVector<TabSlide> Slides;
+	for (auto It = StartPositions.cbegin(); It != StartPositions.cend(); ++It)
+	{
+		auto Tab = It.key();
+		if (!Tab || TabsLayout->indexOf(Tab) < 0 || !Tab->isVisibleTo(_this))
+		{
+			continue;
+		}
+
+		const QPoint StartPosition = It.value();
+		const QPoint TargetPosition = Tab->pos();
+		if (StartPosition == TargetPosition)
+		{
+			continue;
+		}
+
+		Tab->move(StartPosition);
+		Slides.push_back({Tab, StartPosition, TargetPosition});
+	}
+
+	if (Slides.isEmpty())
+	{
+		return;
+	}
+
+	TabSlides = std::move(Slides);
+	auto Animation = new QVariantAnimation(_this);
+	Animation->setDuration(TabSlideAnimationDurationMs);
+	Animation->setEasingCurve(QEasingCurve::OutCubic);
+	Animation->setStartValue(0.0);
+	Animation->setEndValue(1.0);
+	TabSlideAnimation = Animation;
+
+	QObject::connect(Animation, &QVariantAnimation::valueChanged, _this,
+		[this, Animation](const QVariant& Value)
+		{
+			if (TabSlideAnimation != Animation)
+			{
+				return;
+			}
+			const qreal Progress = Value.toReal();
+			for (const auto& Slide : TabSlides)
+			{
+				if (!Slide.Tab)
+				{
+					continue;
+				}
+				const QPoint Delta = Slide.TargetPosition - Slide.StartPosition;
+				Slide.Tab->move(Slide.StartPosition + QPoint(
+					qRound(Delta.x() * Progress),
+					qRound(Delta.y() * Progress)));
+			}
+		});
+	QObject::connect(Animation, &QVariantAnimation::finished, _this,
+		[this, Animation]
+		{
+			if (TabSlideAnimation != Animation)
+			{
+				return;
+			}
+			for (const auto& Slide : TabSlides)
+			{
+				if (Slide.Tab)
+				{
+					Slide.Tab->move(Slide.TargetPosition);
+				}
+			}
+			TabSlides.clear();
+			TabSlideAnimation = nullptr;
+			Animation->deleteLater();
+		});
+	Animation->start();
 }
 
 
@@ -125,6 +306,138 @@ void DockAreaTabBarPrivate::updateTabs()
 
 
 //============================================================================
+bool DockAreaTabBarPrivate::reorderDraggedTab(CDockWidgetTab* MovingTab,
+	int DraggedLeftX, int DragDirection, int DragOriginLeftX)
+{
+	if (!MovingTab || DragDirection == 0)
+	{
+		return false;
+	}
+	if (DraggedTab != MovingTab)
+	{
+		DraggedTab = MovingTab;
+		DragReorderBoundaries.clear();
+		CurrentDragRank = -1;
+		LastReorderDirection = 0;
+
+		QVector<QRect> OriginalTabGeometries;
+		for (int i = 0; i < _this->count(); ++i)
+		{
+			auto Tab = _this->tab(i);
+			if (!Tab->isVisibleTo(_this))
+			{
+				continue;
+			}
+
+			QRect Geometry = Tab->geometry();
+			if (Tab == MovingTab)
+			{
+				CurrentDragRank = OriginalTabGeometries.size();
+				Geometry.moveLeft(DragOriginLeftX);
+			}
+			OriginalTabGeometries.push_back(Geometry);
+		}
+
+		if (CurrentDragRank < 0)
+		{
+			return false;
+		}
+	for (int i = 0; i + 1 < OriginalTabGeometries.size(); ++i)
+	{
+		const QRect SiblingGeometry = (i < CurrentDragRank)
+			? OriginalTabGeometries.at(i)
+			: OriginalTabGeometries.at(i + 1);
+		DragReorderBoundaries.push_back(tabReorderBoundary(
+			SiblingGeometry, i < CurrentDragRank, MovingTab->width()));
+		}
+	}
+
+	const int FromIndex = TabsLayout->indexOf(MovingTab);
+	if (FromIndex < 0)
+	{
+		return false;
+	}
+
+	int ToIndex = -1;
+	if (DragDirection < 0)
+	{
+		if (CurrentDragRank <= 0)
+		{
+			return false;
+		}
+		const int Hysteresis = LastReorderDirection > 0
+			? ReorderReverseHysteresis : 0;
+		if (DraggedLeftX > DragReorderBoundaries.at(CurrentDragRank - 1)
+			- Hysteresis)
+		{
+			return false;
+		}
+		for (int i = FromIndex - 1; i >= 0; --i)
+		{
+			auto SiblingTab = _this->tab(i);
+			if (!SiblingTab->isVisibleTo(_this))
+			{
+				continue;
+			}
+			ToIndex = i;
+			break;
+		}
+	}
+	else
+	{
+		if (CurrentDragRank >= DragReorderBoundaries.size())
+		{
+			return false;
+		}
+		const int Hysteresis = LastReorderDirection < 0
+			? ReorderReverseHysteresis : 0;
+		if (DraggedLeftX < DragReorderBoundaries.at(CurrentDragRank)
+			+ Hysteresis)
+		{
+			return false;
+		}
+		for (int i = FromIndex + 1; i < _this->count(); ++i)
+		{
+			auto SiblingTab = _this->tab(i);
+			if (!SiblingTab->isVisibleTo(_this))
+			{
+				continue;
+			}
+			ToIndex = i;
+			break;
+		}
+	}
+
+	if (ToIndex < 0)
+	{
+		return false;
+	}
+
+	// A tab can be reordered before it is activated. Preserve the currently
+	// displayed tab by identity while the moving tab changes index; activating
+	// the dragged tab is reserved for a completed click or drop.
+	auto CurrentTab = _this->currentTab();
+	const QPoint DraggedPosition = MovingTab->pos();
+	const auto StartPositions = captureTabPositions(MovingTab);
+	stopTabSlideAnimations();
+	TabsLayout->removeWidget(MovingTab);
+	TabsLayout->insertWidget(ToIndex, MovingTab);
+	TabsLayout->activate();
+	ADS_PRINT("tabMoved from " << FromIndex << " to " << ToIndex);
+	Q_EMIT _this->tabMoved(FromIndex, ToIndex);
+	_this->setCurrentIndex(TabsLayout->indexOf(CurrentTab));
+	TabsLayout->invalidate();
+	TabsLayout->activate();
+	animateTabsFrom(StartPositions);
+	MovingTab->move(DraggedPosition);
+	MovingTab->raise();
+	CurrentDragRank += DragDirection;
+	LastReorderDirection = DragDirection;
+	return true;
+}
+
+
+//============================================================================
 CDockAreaTabBar::CDockAreaTabBar(CDockAreaWidget* parent) :
 	QScrollArea(parent),
 	d(new DockAreaTabBarPrivate(this))
@@ -153,6 +466,7 @@ CDockAreaTabBar::CDockAreaTabBar(CDockAreaWidget* parent) :
 //============================================================================
 CDockAreaTabBar::~CDockAreaTabBar()
 {
+	d->stopTabSlideAnimations();
 	delete d;
 }
 
@@ -189,17 +503,21 @@ void CDockAreaTabBar::setCurrentIndex(int index)
 int CDockAreaTabBar::count() const
 {
 	// The tab bar contains a stretch item as last item
-	return d->TabsLayout->count() - 1;
+	return d->TabsLayout->count() - 1
+		- (d->ExternalPreviewSpacer ? 1 : 0);
 }
 
 
 //===========================================================================
 void CDockAreaTabBar::insertTab(int Index, CDockWidgetTab* Tab)
 {
+	clearExternalTabDragPreview();
 	d->TabsLayout->insertWidget(Index, Tab);
 	connect(Tab, SIGNAL(clicked()), this, SLOT(onTabClicked()));
 	connect(Tab, SIGNAL(closeRequested()), this, SLOT(onTabCloseRequested()));
 	connect(Tab, SIGNAL(closeOtherTabsRequested()), this, SLOT(onCloseOtherTabsRequested()));
+	connect(Tab, SIGNAL(dragged(int,int,int)), this,
+		SLOT(onTabWidgetDragged(int,int,int)));
 	connect(Tab, SIGNAL(moved(QPoint)), this, SLOT(onTabWidgetMoved(QPoint)));
 	connect(Tab, SIGNAL(elidedChanged(bool)), this, SIGNAL(elidedChanged(bool)));
 	Tab->installEventFilter(this);
@@ -224,6 +542,7 @@ void CDockAreaTabBar::removeTab(CDockWidgetTab* Tab)
 	{
 		return;
 	}
+	clearExternalTabDragPreview();
     ADS_PRINT("CDockAreaTabBar::removeTab ");
 	int NewCurrentIndex = currentIndex();
 	int RemoveIndex = d->TabsLayout->indexOf(Tab);
@@ -291,14 +610,7 @@ int CDockAreaTabBar::currentIndex() const
 //===========================================================================
 CDockWidgetTab* CDockAreaTabBar::currentTab() const
 {
-	if (d->CurrentIndex < 0 || d->CurrentIndex >= d->TabsLayout->count())
-	{
-		return nullptr;
-	}
-	else
-	{
-		return qobject_cast<CDockWidgetTab*>(d->TabsLayout->itemAt(d->CurrentIndex)->widget());
-	}
+	return tab(d->CurrentIndex);
 }
 
 
@@ -351,58 +663,48 @@ CDockWidgetTab* CDockAreaTabBar::tab(int Index) const
 	{
 		return nullptr;
 	}
-	return qobject_cast<CDockWidgetTab*>(d->TabsLayout->itemAt(Index)->widget());
+
+	int TabIndex = 0;
+	for (int i = 0; i < d->TabsLayout->count(); ++i)
+	{
+		auto Tab = qobject_cast<CDockWidgetTab*>(
+			d->TabsLayout->itemAt(i)->widget());
+		if (!Tab)
+		{
+			continue;
+		}
+		if (TabIndex == Index)
+		{
+			return Tab;
+		}
+		++TabIndex;
+	}
+	return nullptr;
+}
+
+
+//===========================================================================
+void CDockAreaTabBar::onTabWidgetDragged(int DraggedLeftX, int DragDirection,
+	int DragOriginLeftX)
+{
+	CDockWidgetTab* MovingTab = qobject_cast<CDockWidgetTab*>(sender());
+	d->reorderDraggedTab(MovingTab, DraggedLeftX, DragDirection,
+		DragOriginLeftX);
 }
 
 
 //===========================================================================
 void CDockAreaTabBar::onTabWidgetMoved(const QPoint& GlobalPos)
 {
-	CDockWidgetTab* MovingTab = qobject_cast<CDockWidgetTab*>(sender());
-	if (!MovingTab)
-	{
-		return;
-	}
-
-	int fromIndex = d->TabsLayout->indexOf(MovingTab);
-	auto MousePos = mapFromGlobal(GlobalPos);
-	MousePos.rx() = qMax(0, MousePos.x());
-	MousePos.rx() = qMin(width(), MousePos.x());
-	int toIndex = -1;
-	// Find tab under mouse
-	for (int i = 0; i < count(); ++i)
-	{
-		CDockWidgetTab* DropTab = tab(i);
-		auto TabGeometry = DropTab->geometry();
-		TabGeometry.setTopLeft(d->TabsContainerWidget->mapToParent(TabGeometry.topLeft()));
-		TabGeometry.setBottomRight(d->TabsContainerWidget->mapToParent(TabGeometry.bottomRight()));
-		if (DropTab == MovingTab || !DropTab->isVisibleTo(this)
-		    || !TabGeometry.contains(MousePos))
-		{
-			continue;
-		}
-
-		toIndex = d->TabsLayout->indexOf(DropTab);
-		if (toIndex == fromIndex)
-		{
-			toIndex = -1;
-		}
-		break;
-	}
-
-	if (toIndex > -1)
-	{
-		d->TabsLayout->removeWidget(MovingTab);
-		d->TabsLayout->insertWidget(toIndex, MovingTab);
-        ADS_PRINT("tabMoved from " << fromIndex << " to " << toIndex);
-		Q_EMIT tabMoved(fromIndex, toIndex);
-		setCurrentIndex(toIndex);
-	}
-	else
-	{
-		// Ensure that the moved tab is reset to its start position
-		d->TabsLayout->update();
-	}
+	Q_UNUSED(GlobalPos)
+	d->DraggedTab.clear();
+	d->DragReorderBoundaries.clear();
+	d->CurrentDragRank = -1;
+	d->LastReorderDirection = 0;
+	// Ensure that the released tab is seated in its layout slot.
+	d->stopTabSlideAnimations();
+	d->TabsLayout->invalidate();
+	d->TabsLayout->activate();
 }
 
 //===========================================================================
@@ -531,6 +833,262 @@ int CDockAreaTabBar::tabInsertIndexAt(const QPoint& Pos) const
 	{
 		return (Index < 0) ? 0 : Index;
 	}
+}
+
+
+//===========================================================================
+int CDockAreaTabBar::previewExternalTabDrag(int DraggedLeftGlobal,
+	int DraggedWidth, int DragDirection)
+{
+	DraggedWidth = qMax(1, DraggedWidth);
+	bool PreviewWidthChanged = false;
+	bool AnimateLayoutChange = false;
+	QHash<CDockWidgetTab*, QPoint> StartPositions;
+	if (d->ExternalPreviewTabs.isEmpty()
+	 || d->ExternalPreviewWidth != DraggedWidth)
+	{
+		StartPositions = d->captureTabPositions();
+		d->stopTabSlideAnimations();
+		AnimateLayoutChange = true;
+		clearExternalTabDragPreview();
+		d->TabsLayout->activate();
+		d->ExternalPreviewWidth = DraggedWidth;
+		PreviewWidthChanged = true;
+		d->ExternalPreviewContainerMinimumWidth =
+			d->TabsContainerWidget->minimumWidth();
+		d->ExternalPreviewHorizontalScroll = horizontalScrollBar()->value();
+		d->TabsContainerWidget->setMinimumWidth(
+			d->TabsLayout->sizeHint().width() + DraggedWidth
+			+ d->TabsLayout->spacing());
+
+		for (int i = 0; i < count(); ++i)
+		{
+			auto Tab = tab(i);
+			if (!Tab || !Tab->isVisibleTo(this))
+			{
+				continue;
+			}
+
+			d->ExternalPreviewTabs.push_back(Tab);
+			d->ExternalPreviewLayoutIndices.push_back(
+				d->TabsLayout->indexOf(Tab));
+		}
+	}
+	if (PreviewWidthChanged)
+	{
+		Q_EMIT externalTabDragPreviewChanged(DraggedWidth);
+		d->TabsLayout->activate();
+		updateGeometry();
+		if (parentWidget() && parentWidget()->layout())
+		{
+			parentWidget()->layout()->activate();
+		}
+
+		// Capture stable, gap-free geometry after the receiving title bar has
+		// synchronously yielded any responsive chrome. Once the initial slot is
+		// known below, it is translated into the exact boundary model used by an
+		// ordinary in-row tab drag.
+		d->ExternalPreviewTabGeometriesGlobal.clear();
+		for (auto Tab : d->ExternalPreviewTabs)
+		{
+			if (!Tab)
+			{
+				continue;
+			}
+			const int TabLeftGlobal = Tab->mapToGlobal(QPoint()).x();
+			d->ExternalPreviewTabGeometriesGlobal.push_back(
+				QRect(TabLeftGlobal, 0, Tab->width(), Tab->height()));
+		}
+	}
+
+	const int PreviousRank = d->ExternalPreviewRank;
+	int NewRank = PreviousRank;
+	if (PreviousRank < 0)
+	{
+		const int DraggedCenterGlobal =
+			DraggedLeftGlobal + DraggedWidth / 2;
+		NewRank = 0;
+		while (NewRank < d->ExternalPreviewTabGeometriesGlobal.size()
+		 && DraggedCenterGlobal >=
+			d->ExternalPreviewTabGeometriesGlobal.at(NewRank).center().x())
+		{
+			++NewRank;
+		}
+
+		d->ExternalPreviewReorderBoundariesGlobal.clear();
+		const int PreviewSpacing = qMax(0, d->TabsLayout->spacing());
+		for (int i = 0;
+			i < d->ExternalPreviewTabGeometriesGlobal.size(); ++i)
+		{
+			QRect Geometry =
+				d->ExternalPreviewTabGeometriesGlobal.at(i);
+			const bool SiblingPrecedesMovingTab = i < NewRank;
+			if (!SiblingPrecedesMovingTab)
+			{
+				Geometry.translate(DraggedWidth + PreviewSpacing, 0);
+			}
+			d->ExternalPreviewReorderBoundariesGlobal.push_back(
+				tabReorderBoundary(Geometry,
+					SiblingPrecedesMovingTab, DraggedWidth));
+		}
+		d->ExternalPreviewLastReorderDirection = 0;
+	}
+	else
+	{
+		if (DragDirection > 0 && PreviousRank
+			< d->ExternalPreviewReorderBoundariesGlobal.size())
+		{
+			const int Hysteresis =
+				d->ExternalPreviewLastReorderDirection < 0
+					? ReorderReverseHysteresis : 0;
+			if (DraggedLeftGlobal >=
+				d->ExternalPreviewReorderBoundariesGlobal.at(PreviousRank)
+					+ Hysteresis)
+			{
+				NewRank = PreviousRank + 1;
+				d->ExternalPreviewLastReorderDirection = 1;
+			}
+		}
+		else if (DragDirection < 0 && PreviousRank > 0)
+		{
+			const int Hysteresis =
+				d->ExternalPreviewLastReorderDirection > 0
+					? ReorderReverseHysteresis : 0;
+			if (DraggedLeftGlobal <=
+				d->ExternalPreviewReorderBoundariesGlobal.at(PreviousRank - 1)
+					- Hysteresis)
+			{
+				NewRank = PreviousRank - 1;
+				d->ExternalPreviewLastReorderDirection = -1;
+			}
+		}
+	}
+	const bool RankChanged = NewRank != PreviousRank;
+	d->ExternalPreviewRank = NewRank;
+
+	if (!d->ExternalPreviewSpacer || RankChanged)
+	{
+		if (!AnimateLayoutChange)
+		{
+			StartPositions = d->captureTabPositions();
+			d->stopTabSlideAnimations();
+			AnimateLayoutChange = true;
+		}
+		if (d->ExternalPreviewSpacer)
+		{
+			d->TabsLayout->removeItem(d->ExternalPreviewSpacer);
+		}
+		else
+		{
+			d->ExternalPreviewSpacer = new QSpacerItem(DraggedWidth, 0,
+				QSizePolicy::Fixed, QSizePolicy::Minimum);
+		}
+
+		const int LayoutIndex = NewRank <
+			d->ExternalPreviewLayoutIndices.size()
+			? d->ExternalPreviewLayoutIndices.at(NewRank)
+			: d->TabsLayout->count() - 1;
+		d->TabsLayout->insertItem(LayoutIndex,
+			d->ExternalPreviewSpacer);
+		d->TabsLayout->invalidate();
+		d->TabsLayout->activate();
+		updateGeometry();
+		if (parentWidget() && parentWidget()->layout())
+		{
+			parentWidget()->layout()->activate();
+		}
+	}
+
+	// Keep a recognizable portion of the next destination tab visible when a
+	// wide incoming tab consumes most (or all) of the available tab rail. The
+	// surrounding title bar has already been given a chance to reflow here.
+	// Revealing the whole destination tab would scroll away nearly the insertion
+	// shift, making the tab appear stationary. Instead, preserve the visible
+	// rightward movement and scroll only enough to leave an anchored slice of the
+	// destination tab on-screen when reflow alone cannot provide enough room.
+	if (!d->ExternalPreviewTabs.isEmpty())
+	{
+		const int AnchorRank = qMin(NewRank,
+			d->ExternalPreviewTabs.size() - 1);
+		auto AnchorDestinationTab =
+			d->ExternalPreviewTabs.at(AnchorRank);
+		if (AnchorDestinationTab)
+		{
+			const int VisibleTabWidth = qMin(AnchorDestinationTab->width(),
+				qMin(viewport()->width(), qMax(
+					ExternalPreviewMinimumVisibleTabWidth,
+					viewport()->width() / 3)));
+			const int MaximumVisibleLeft = viewport()->width()
+				- VisibleTabWidth;
+			const int RequiredScroll = qMax(
+				d->ExternalPreviewHorizontalScroll,
+				AnchorDestinationTab->geometry().left()
+					- MaximumVisibleLeft);
+			horizontalScrollBar()->setValue(RequiredScroll);
+		}
+	}
+	if (AnimateLayoutChange)
+	{
+		d->animateTabsFrom(StartPositions);
+	}
+	viewport()->update();
+
+	if (NewRank < d->ExternalPreviewLayoutIndices.size())
+	{
+		return d->ExternalPreviewLayoutIndices.at(NewRank);
+	}
+	return count();
+}
+
+
+//===========================================================================
+int CDockAreaTabBar::externalTabDragPreviewWidth() const
+{
+	return d->ExternalPreviewWidth;
+}
+
+
+//===========================================================================
+void CDockAreaTabBar::clearExternalTabDragPreview()
+{
+	d->stopTabSlideAnimations();
+	const bool HadPreview = d->ExternalPreviewWidth > 0;
+	if (d->ExternalPreviewSpacer)
+	{
+		d->TabsLayout->removeItem(d->ExternalPreviewSpacer);
+		delete d->ExternalPreviewSpacer;
+		d->ExternalPreviewSpacer = nullptr;
+	}
+	if (d->ExternalPreviewContainerMinimumWidth >= 0)
+	{
+		d->TabsContainerWidget->setMinimumWidth(
+			d->ExternalPreviewContainerMinimumWidth);
+	}
+	if (d->ExternalPreviewHorizontalScroll >= 0)
+	{
+		horizontalScrollBar()->setValue(d->ExternalPreviewHorizontalScroll);
+	}
+	d->ExternalPreviewTabs.clear();
+	d->ExternalPreviewLayoutIndices.clear();
+	d->ExternalPreviewTabGeometriesGlobal.clear();
+	d->ExternalPreviewReorderBoundariesGlobal.clear();
+	d->ExternalPreviewContainerMinimumWidth = -1;
+	d->ExternalPreviewHorizontalScroll = -1;
+	d->ExternalPreviewRank = -1;
+	d->ExternalPreviewLastReorderDirection = 0;
+	d->ExternalPreviewWidth = 0;
+	if (HadPreview)
+	{
+		Q_EMIT externalTabDragPreviewChanged(0);
+	}
+	d->TabsLayout->invalidate();
+	d->TabsLayout->activate();
+	updateGeometry();
+	if (parentWidget() && parentWidget()->layout())
+	{
+		parentWidget()->layout()->activate();
+	}
+	viewport()->update();
 }
 
 

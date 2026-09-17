@@ -317,10 +317,17 @@ IFloatingWidget* DockAreaTitleBarPrivate::makeAreaFloating(const QPoint& Offset,
 	else
 	{
 		auto w = new CFloatingDragPreview(DockArea);
-		QObject::connect(w, &CFloatingDragPreview::draggingCanceled, [this]()
+		const auto ResetDrag = [this, w]()
 		{
-			this->DragState = DraggingInactive;
-		});
+			if (this->FloatingWidget == w)
+			{
+				this->FloatingWidget = nullptr;
+				this->DragState = DraggingInactive;
+			}
+		};
+		QObject::connect(w, &CFloatingDragPreview::draggingCanceled,
+			_this, ResetDrag);
+		QObject::connect(w, &QObject::destroyed, _this, ResetDrag);
 		if (internal::isWayland())
 		{
 			// Confine the in-window preview to the source container; its

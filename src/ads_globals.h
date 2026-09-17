@@ -172,6 +172,21 @@ extern const int FloatingWidgetDragStartEvent;
 extern const int DockedWidgetDragStartEvent;
 extern const int FloatingWidgetDragCancelEvent;
 
+/**
+ * Checks a floating-window drag's radial distance. Both positions must use
+ * the same coordinate space; CoordinateScale converts the logical-pixel
+ * threshold to that space (the drag-start DPI ratio for native Windows frames).
+ */
+inline bool floatingWindowDockDistanceReached(const QPoint& StartPosition,
+	const QPoint& CurrentPosition, int LogicalDistance,
+	qreal CoordinateScale = 1.0)
+{
+	const qreal DeltaX = qreal(CurrentPosition.x()) - StartPosition.x();
+	const qreal DeltaY = qreal(CurrentPosition.y()) - StartPosition.y();
+	const qreal Threshold = LogicalDistance * CoordinateScale;
+	return DeltaX * DeltaX + DeltaY * DeltaY >= Threshold * Threshold;
+}
+
 #if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
 // Utils to directly communicate with the X server
 /**

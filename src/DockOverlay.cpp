@@ -43,6 +43,7 @@
 
 #include <QPointer>
 #include <QPaintEvent>
+#include <QRegion>
 #include <QResizeEvent>
 #include <QMoveEvent>
 #include <QPainter>
@@ -76,9 +77,12 @@ struct DockOverlayPrivate
 	CDockOverlay* _this;
 	DockWidgetAreas AllowedAreas = InvalidDockWidgetArea;
 	CDockOverlayCross* Cross;
+	QLabel* DragPreviewHeader;
+	qint64 DragPreviewHeaderCacheKey = 0;
 	QPointer<QWidget> TargetWidget;
 	DockWidgetArea LastLocation = InvalidDockWidgetArea;
 	bool DropPreviewEnabled = true;
+	bool DropPreviewOutlineOnly = false;
 	CDockOverlay::eMode Mode = CDockOverlay::ModeDockAreaOverlay;
 	QRect DropAreaRect;
 	int TabIndex = InvalidTabIndex;
@@ -440,6 +444,9 @@ CDockOverlay::CDockOverlay(QWidget* parent, eMode Mode) :
 {
 	d->Mode = Mode;
 	d->Cross = new CDockOverlayCross(this);
+	d->DragPreviewHeader = new QLabel(this);
+	d->DragPreviewHeader->setAttribute(Qt::WA_TransparentForMouseEvents);
+	d->DragPreviewHeader->hide();
 	if (internal::isWayland())
 	{
 		// Remember the stable home window so hideOverlay() can reparent the
@@ -511,6 +518,26 @@ DockWidgetAreas CDockOverlay::allowedAreas() const
 
 
 //============================================================================
+DockWidgetArea CDockOverlay::dropIndicatorAreaUnderCursor() const
+{
+	return dropIndicatorAreaUnderCursor(QCursor::pos());
+}
+
+
+//============================================================================
+DockWidgetArea CDockOverlay::dropIndicatorAreaUnderCursor(
+	const QPoint& GlobalPos) const
+{
+	if (!d->TargetWidget)
+	{
+		return InvalidDockWidgetArea;
+	}
+
+	return d->Cross->cursorLocation(GlobalPos);
+}
+
+
+//============================================================================
 DockWidgetArea CDockOverlay::dropAreaUnderCursor() const
 {
 	return dropAreaUnderCursor(QCursor::pos());
@@ -526,7 +553,7 @@ DockWidgetArea CDockOverlay::dropAreaUnderCursor(const QPoint& GlobalPos) const
 		return InvalidDockWidgetArea;
 	}
 
-	DockWidgetArea Result = d->Cross->cursorLocation(GlobalPos);
+	DockWidgetArea Result = dropIndicatorAreaUnderCursor(GlobalPos);
 	if (Result != InvalidDockWidgetArea)
 	{
 		return Result;
@@ -850,7 +877,9 @@ DockWidgetArea CDockOverlay::showOverlay(QWidget* target, const QPoint& GlobalPo
 //============================================================================
 void CDockOverlay::hideOverlay()
 {
+	d->DragPreviewHeader->hide();
 	hide();
+	d->DropPreviewOutlineOnly = false;
 	// Wayland: showOverlay() reparents this overlay (and its cross) into the
 	// top level window it is shown over. Reparent them back to the stable home
 	// window now that the overlay is hidden, so the dock-manager-owned overlay
@@ -869,9 +898,73 @@ void CDockOverlay::hideOverlay()
 
 
 //============================================================================
+bool CDockOverlay::setDragPreviewHeader(const QPixmap& Pixmap,
+	const QPoint& GlobalTopLeft)
+{
+	// Header-lock mode keeps the drag preview itself vertically snapped to the
+	// destination tab bar. Do not move a duplicate header into the full-area
+	// outline overlay, where it would follow the raw cursor and be clipped by
+	// the destination panel bounds.
+	if (Pixmap.isNull() || isHidden() || d->DropPreviewOutlineOnly)
+	{
+		d->DragPreviewHeader->hide();
+		return false;
+	}
+
+	if (d->DragPreviewHeaderCacheKey != Pixmap.cacheKey())
+	{
+		d->DragPreviewHeaderCacheKey = Pixmap.cacheKey();
+		d->DragPreviewHeader->setPixmap(Pixmap);
+		const qreal PixelRatio = Pixmap.devicePixelRatio();
+		d->DragPreviewHeader->resize(qRound(Pixmap.width() / PixelRatio),
+			qRound(Pixmap.height() / PixelRatio));
+	}
+	d->DragPreviewHeader->move(mapFromGlobal(GlobalTopLeft));
+	if (d->DragPreviewHeader->isHidden())
+	{
+		d->DragPreviewHeader->show();
+		d->DragPreviewHeader->raise();
+	}
+	return true;
+}
+
+
+//============================================================================
+void CDockOverlay::setDropPreviewOutlineOnly(bool OutlineOnly)
+{
+	if (d->DropPreviewOutlineOnly == OutlineOnly)
+	{
+		return;
+	}
+
+	d->DropPreviewOutlineOnly = OutlineOnly;
+	if (OutlineOnly)
+	{
+		d->DragPreviewHeader->hide();
+	}
+	if (!isHidden())
+	{
+		d->Cross->setVisible(!OutlineOnly);
+	}
+	update();
+}
+
+
+//============================================================================
+bool CDockOverlay::dropPreviewOutlineOnly() const
+{
+	return d->DropPreviewOutlineOnly;
+}
+
+
+//============================================================================
 void CDockOverlay::enableDropPreview(bool Enable)
 {
 	d->DropPreviewEnabled = Enable;
+	if (!Enable)
+	{
+		d->DropAreaRect = QRect();
+	}
 	update();
 }
 
@@ -919,6 +1012,22 @@ void CDockOverlay::paintEvent(QPaintEvent* event)
 
 	QPainter painter(this);
     QColor Color = palette().color(QPalette::Active, QPalette::Highlight);
+	if (d->DropPreviewOutlineOnly)
+	{
+		constexpr int OutlineWidth = 1;
+		QRegion OutlineRegion(r);
+		const QRect Inner = r.adjusted(OutlineWidth, OutlineWidth,
+			-OutlineWidth, -OutlineWidth);
+		if (!Inner.isEmpty())
+		{
+			OutlineRegion -= QRegion(Inner);
+		}
+		painter.setClipRegion(OutlineRegion);
+		painter.fillRect(r, Color);
+		d->DropAreaRect = r;
+		return;
+	}
+
     QPen Pen = painter.pen();
     Pen.setColor(Color.darker(120));
     Pen.setStyle(Qt::SolidLine);
@@ -943,7 +1052,7 @@ QRect CDockOverlay::dropOverlayRect() const
 //============================================================================
 void CDockOverlay::showEvent(QShowEvent* e)
 {
-	d->Cross->show();
+	d->Cross->setVisible(!d->DropPreviewOutlineOnly);
 	QFrame::showEvent(e);
 }
 
@@ -1076,10 +1185,12 @@ void CDockOverlayCross::setupOverlayCross(CDockOverlay::eMode Mode)
 //============================================================================
 void CDockOverlayCross::updateOverlayIcons()
 {
-	// Wayland: the cross is a child widget and has no window handle, so the
-	// device pixel ratio is taken from the widget instead of the window
-	const qreal DevicePixelRatio = internal::isWayland()
-		? devicePixelRatioF() : windowHandle()->devicePixelRatio();
+	// Wayland and outline-only previews can keep the cross as a hidden child
+	// without a native window handle. The widget still has the correct device
+	// pixel ratio for refreshing its cached indicator pixmaps.
+	auto Window = windowHandle();
+	const qreal DevicePixelRatio = (internal::isWayland() || !Window)
+		? devicePixelRatioF() : Window->devicePixelRatio();
 	if (DevicePixelRatio == d->LastDevicePixelRatio)
 	{
 		return;

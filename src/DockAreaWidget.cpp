@@ -151,6 +151,26 @@ public:
 	}
 
 	/**
+	 * Moves a widget within the internal list without changing the visible
+	 * widget's parent or visibility.
+	 */
+	void moveWidget(int fromIndex, int toIndex)
+	{
+		if (fromIndex < 0 || fromIndex >= m_Widgets.size()
+		 || toIndex < 0 || toIndex >= m_Widgets.size()
+		 || fromIndex == toIndex)
+		{
+			return;
+		}
+
+		m_Widgets.move(fromIndex, toIndex);
+		if (m_CurrentWidget)
+		{
+			m_CurrentIndex = m_Widgets.indexOf(m_CurrentWidget);
+		}
+	}
+
+	/**
 	 * Returns the current selected widget
 	 */
 	QWidget* currentWidget() const
@@ -856,10 +876,7 @@ void CDockAreaWidget::reorderDockWidget(int fromIndex, int toIndex)
 		return;
 	}
 
-	auto Widget = d->ContentsLayout->widget(fromIndex);
-	d->ContentsLayout->removeWidget(Widget);
-	d->ContentsLayout->insertWidget(toIndex, Widget);
-	setCurrentIndex(toIndex);
+	d->ContentsLayout->moveWidget(fromIndex, toIndex);
 }
 
 

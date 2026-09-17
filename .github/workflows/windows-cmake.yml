@@ -42,11 +42,31 @@ jobs:
         cmake -S . -B build -G Ninja `
           -DCMAKE_PREFIX_PATH="${{ env.QT_DIR }}\Qt\${{ env.QT_VERSION }}\msvc2019_64" `
           -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}\install" `
-          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_BUILD_TYPE=Release `
+          -DBUILD_TESTS=ON
       shell: powershell
 
     - name: 🔨 Build with Ninja + MSVC
       run: cmake --build build
+      shell: powershell
+
+    - name: Add built QtADS DLL directory to PATH
+      run: |
+        "$env:GITHUB_WORKSPACE\build\x64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      shell: powershell
+
+    - name: Run fork regression tests with native Windows integration
+      env:
+        QT_QPA_PLATFORM: windows
+        QT_SCALE_FACTOR: '1'
+      run: ctest --test-dir build --output-on-failure --no-tests=error
+      shell: powershell
+
+    - name: Run scaled Windows docking regression tests
+      env:
+        QT_QPA_PLATFORM: windows
+        QT_SCALE_FACTOR: '2'
+      run: ctest --test-dir build --output-on-failure --no-tests=error -R '^OverlayGateTest$'
       shell: powershell
 
     - name: 📦 Install built files
