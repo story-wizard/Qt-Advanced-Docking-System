@@ -194,7 +194,9 @@ void TabDragTest::floatingSplit_recombineTabs()
 	const QPoint SplitPress = SplitTab->mapToGlobal(SplitTab->rect().center());
 	sendMouseEvent(SplitTab, QEvent::MouseButtonPress, SplitPress,
 		Qt::LeftButton, Qt::LeftButton);
+	// Deferred overlay refreshes read the live cursor, not synthetic event positions.
 	const QPoint Center = Area->mapToGlobal(Area->rect().center());
+	QCursor::setPos(Center);
 	sendMouseEvent(SplitTab, QEvent::MouseMove, Center,
 		Qt::NoButton, Qt::LeftButton);
 	sendMouseEvent(SplitTab, QEvent::MouseMove, Center,
