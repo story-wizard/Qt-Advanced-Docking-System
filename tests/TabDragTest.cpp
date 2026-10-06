@@ -180,6 +180,11 @@ void TabDragTest::floatingSplit_recombineTabs()
 	auto Area = First->dockAreaWidget();
 	Manager.addDockWidgetTabToArea(Second, Area);
 	Floating->resize(700, 700);
+	// Offscreen platforms do not reliably report native window stacking.
+	// Keep the manager outside the floating window so hit testing is unambiguous.
+	Manager.resize(300, 300);
+	Manager.move(900, 100);
+	Floating->move(50, 50);
 	Manager.show();
 	Floating->show();
 	QApplication::processEvents();
@@ -195,10 +200,13 @@ void TabDragTest::floatingSplit_recombineTabs()
 	sendMouseEvent(SplitTab, QEvent::MouseMove, Center,
 		Qt::NoButton, Qt::LeftButton);
 	QApplication::processEvents();
+	QCOMPARE(SplitTab->dragState(), DraggingFloatingWidget);
 	QPoint Bottom;
-	for (int y = 1; y < Area->height() / 2; ++y)
+	// Hit the actual marker geometry: native floating title bars and platform
+	// styles can offset the container cross relative to the dock area's center.
+	for (auto Widget : Manager.containerOverlay()->parentWidget()->findChildren<QWidget*>())
 	{
-		const QPoint Candidate = Center + QPoint(0, y);
+		const QPoint Candidate = Widget->mapToGlobal(Widget->rect().center());
 		if (Manager.containerOverlay()->dropIndicatorAreaUnderCursor(Candidate)
 			== BottomDockWidgetArea)
 		{

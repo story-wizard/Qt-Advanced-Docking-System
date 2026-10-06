@@ -360,7 +360,7 @@ void QuadrantHitTestTest::containerEdge_allowedAreasExcludesNearestEdge_picksNex
 	const QRect bounds(0, 0, 800, 600);
 	// Cursor at (5, 5): in both the left band (5px in) and the top band
 	// (5px in). With Left excluded, Top wins.
-	const DockWidgetAreas withoutLeft = OuterDockAreas
+	const DockWidgetAreas withoutLeft = DockWidgetAreas(OuterDockAreas)
 		& ~DockWidgetAreas(LeftDockWidgetArea);
 	QCOMPARE(CDockOverlay::containerEdgeAreaForCursor(bounds, QPoint(5, 5),
 			withoutLeft, 24),
