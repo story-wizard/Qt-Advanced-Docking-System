@@ -216,6 +216,20 @@ void TabDragTest::floatingSplit_recombineTabs()
 			break;
 		}
 	}
+	if (Bottom.isNull())
+	{
+		qWarning() << "split setup" << Center << "cursor" << QCursor::pos()
+			<< "area" << Area->geometry() << Area->isVisible()
+			<< "container" << Container->geometry() << Container->isVisible()
+			<< "allowed" << Manager.containerOverlay()->allowedAreas();
+		for (auto Widget : Manager.findChildren<QWidget*>())
+		{
+			if (qobject_cast<CDockOverlay*>(Widget)
+				|| qobject_cast<CDockOverlayCross*>(Widget)
+				|| qobject_cast<CFloatingDragPreview*>(Widget))
+				qWarning() << Widget << Widget->isVisible() << Widget->geometry();
+		}
+	}
 	QVERIFY(!Bottom.isNull());
 	QCursor::setPos(Bottom);
 	sendMouseEvent(SplitTab, QEvent::MouseMove, Bottom,
