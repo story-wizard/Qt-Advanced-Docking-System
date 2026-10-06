@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
-project(ads_demo VERSION ${VERSION_SHORT}) 
+project(ads_demo VERSION ${QtADS_VERSION}) 
+
+if(QtADS_IS_TOP_LEVEL)
+    set(CMAKE_FOLDER "Demo")
+endif()
 
 find_package(QT NAMES Qt6 Qt5 COMPONENTS Core REQUIRED)
 find_package(Qt${QT_VERSION_MAJOR} 5.5 COMPONENTS Core Gui Widgets Quick QuickWidgets REQUIRED)
@@ -27,7 +31,7 @@ target_link_libraries(AdvancedDockingSystemDemo PUBLIC Qt${QT_VERSION_MAJOR}::Co
 if(WIN32 AND QT_VERSION_MAJOR LESS 6)
     target_link_libraries(AdvancedDockingSystemDemo PUBLIC Qt${QT_VERSION_MAJOR}::AxContainer)
 endif()
-target_link_libraries(AdvancedDockingSystemDemo PRIVATE qtadvanceddocking-qt${QT_VERSION_MAJOR})
+target_link_libraries(AdvancedDockingSystemDemo PRIVATE ads::qtadvanceddocking)
 set_target_properties(AdvancedDockingSystemDemo PROPERTIES 
     AUTOMOC ON
     AUTORCC ON
@@ -35,7 +39,7 @@ set_target_properties(AdvancedDockingSystemDemo PROPERTIES
     CXX_STANDARD 14
     CXX_STANDARD_REQUIRED ON
     CXX_EXTENSIONS OFF
-    VERSION ${VERSION_SHORT}
+    VERSION ${QtADS_VERSION}
     EXPORT_NAME "Qt Advanced Docking System Demo"
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/${ads_PlatformDir}/lib"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/${ads_PlatformDir}/lib"

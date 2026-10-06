@@ -34,6 +34,11 @@ function(add_ads_qt_test target)
     )
 
     add_test(NAME ${target} COMMAND ${target})
+    if(WIZARD_NONACTIVATING_TESTS)
+        set_tests_properties(${target} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        )
+    endif()
 endfunction()
 
 add_ads_qt_test(QuadrantHitTestTest QuadrantHitTestTest.cpp)

@@ -17,6 +17,7 @@
 #include "DockAreaTitleBar.h"
 #include "DockAreaWidget.h"
 #include "FloatingDragPreview.h"
+#include "FloatingDockContainer.h"
 #include "DockManager.h"
 #include "DockOverlay.h"
 #include "DockWidget.h"
@@ -120,6 +121,9 @@ class TabDragTest : public QObject
 	Q_OBJECT
 
 private slots:
+	void floatingSplit_recombineTabs_data();
+	void floatingSplit_recombineTabs();
+	void restoreState_restoresFocusedDock();
 	void inactiveTab_clickActivatesOnlyOnRelease();
 	void inactiveTab_reordersWithoutActivation();
 	void horizontalDrag_usesOverlapHysteresisAndStaysOnTabRail();
@@ -131,11 +135,152 @@ private slots:
 	void externalPreview_wideSlotKeepsDestinationTabVisible();
 	void floatingDrag_reenteringSourceHeaderResumesTabReorder();
 	void floatingDrag_enteringAnotherHeaderPreviewsUntilRelease();
+	void floatingDrag_singleTabSourceUsesLiveTabSnapshot_data();
 	void floatingDrag_singleTabSourceUsesLiveTabSnapshot();
 	void floatingDrag_inactiveTabUsesVisibleSourceAreaSize();
 	void floatingDrag_invalidatedGestureCancels_data();
 	void floatingDrag_invalidatedGestureCancels();
 };
+
+void TabDragTest::floatingSplit_recombineTabs_data()
+{
+	QTest::addColumn<bool>("NativeContent");
+	QTest::addColumn<bool>("CenterMarker");
+	QTest::newRow("widgets-header") << false << false;
+	QTest::newRow("native-widgets-header") << true << false;
+	QTest::newRow("widgets-center") << false << true;
+	QTest::newRow("native-widgets-center") << true << true;
+}
+
+void TabDragTest::floatingSplit_recombineTabs()
+{
+	QFETCH(bool, NativeContent);
+	QFETCH(bool, CenterMarker);
+	struct ConfigRestorer
+	{
+		CDockManager::ConfigFlags Flags = CDockManager::configFlags();
+		~ConfigRestorer() { CDockManager::setConfigFlags(Flags); }
+	} RestoreConfig;
+	CDockManager::setConfigFlag(CDockManager::AlwaysShowTabs, false);
+	class TestManager : public CDockManager
+	{
+	public:
+		using CDockManager::dockAreaOverlay;
+		using CDockManager::containerOverlay;
+	};
+	TestManager Manager;
+	auto First = makeDockWidget(Manager, "First");
+	auto Second = makeDockWidget(Manager, "Second");
+	if (NativeContent)
+	{
+		First->widget()->setAttribute(Qt::WA_NativeWindow);
+		Second->widget()->setAttribute(Qt::WA_NativeWindow);
+	}
+	QPointer<CFloatingDockContainer> Floating = Manager.addDockWidgetFloating(First);
+	auto Area = First->dockAreaWidget();
+	Manager.addDockWidgetTabToArea(Second, Area);
+	Floating->resize(700, 700);
+	Manager.show();
+	Floating->show();
+	QApplication::processEvents();
+	auto Container = Floating->dockContainer();
+	// Split using the same tab gesture as the reported sequence.
+	auto SplitTab = Second->tabWidget();
+	const QPoint SplitPress = SplitTab->mapToGlobal(SplitTab->rect().center());
+	sendMouseEvent(SplitTab, QEvent::MouseButtonPress, SplitPress,
+		Qt::LeftButton, Qt::LeftButton);
+	const QPoint Center = Area->mapToGlobal(Area->rect().center());
+	sendMouseEvent(SplitTab, QEvent::MouseMove, Center,
+		Qt::NoButton, Qt::LeftButton);
+	sendMouseEvent(SplitTab, QEvent::MouseMove, Center,
+		Qt::NoButton, Qt::LeftButton);
+	QApplication::processEvents();
+	QPoint Bottom;
+	for (int y = 1; y < Area->height() / 2; ++y)
+	{
+		const QPoint Candidate = Center + QPoint(0, y);
+		if (Manager.containerOverlay()->dropIndicatorAreaUnderCursor(Candidate)
+			== BottomDockWidgetArea)
+		{
+			Bottom = Candidate;
+			break;
+		}
+	}
+	QVERIFY(!Bottom.isNull());
+	QCursor::setPos(Bottom);
+	sendMouseEvent(SplitTab, QEvent::MouseMove, Bottom,
+		Qt::NoButton, Qt::LeftButton);
+	sendMouseEvent(SplitTab, QEvent::MouseButtonRelease, Bottom,
+		Qt::LeftButton, Qt::NoButton);
+	QApplication::processEvents();
+	QCOMPARE(Container->dockAreaCount(), 2);
+	auto SecondArea = Second->dockAreaWidget();
+	QVERIFY(SecondArea != Area);
+	auto SecondTab = Second->tabWidget();
+	const QPoint Press = SecondTab->mapToGlobal(SecondTab->rect().center());
+	sendMouseEvent(SecondTab, QEvent::MouseButtonPress, Press,
+		Qt::LeftButton, Qt::LeftButton);
+	sendMouseEvent(SecondTab, QEvent::MouseMove,
+		Press + QPoint(0, CDockManager::startDragDistance()),
+		Qt::NoButton, Qt::LeftButton);
+	QCOMPARE(SecondTab->dragState(), DraggingFloatingWidget);
+	const QPoint Header = CenterMarker
+		? Area->mapToGlobal(Area->rect().center())
+		: First->tabWidget()->mapToGlobal(QPoint(1, 10));
+	if (CenterMarker)
+		QCursor::setPos(Header);
+	sendMouseEvent(SecondTab, QEvent::MouseMove, Header,
+		Qt::NoButton, Qt::LeftButton);
+	if (CenterMarker)
+	{
+		QCOMPARE(Manager.dockAreaOverlay()->visibleDropAreaUnderCursor(Header),
+			CenterDockWidgetArea);
+	}
+	sendMouseEvent(SecondTab, QEvent::MouseButtonRelease, Header,
+		Qt::LeftButton, Qt::NoButton);
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+	QApplication::processEvents();
+	QVERIFY(Floating);
+	QCOMPARE(Container->dockAreaCount(), 1);
+	QCOMPARE(First->dockAreaWidget(), Second->dockAreaWidget());
+	QCOMPARE(Area->dockWidgetsCount(), 2);
+	auto Bar = Area->titleBar()->tabBar();
+	QCOMPARE(Bar->count(), 2);
+	QCOMPARE(Bar->externalTabDragPreviewWidth(), 0);
+	QVERIFY(First->tabWidget()->isVisible());
+	QVERIFY(SecondTab->isVisible());
+	QVERIFY(!First->tabWidget()->geometry().intersects(SecondTab->geometry()));
+	Area->setCurrentDockWidget(First);
+	QVERIFY(First->isVisible());
+	Area->setCurrentDockWidget(Second);
+	QVERIFY(Second->isVisible());
+}
+
+void TabDragTest::restoreState_restoresFocusedDock()
+{
+	struct ConfigRestorer
+	{
+		CDockManager::ConfigFlags Flags = CDockManager::configFlags();
+		~ConfigRestorer() { CDockManager::setConfigFlags(Flags); }
+	} RestoreConfig;
+	CDockManager::setConfigFlag(CDockManager::FocusHighlighting, true);
+	CDockManager Manager;
+	auto First = makeDockWidget(Manager, "First");
+	auto Second = makeDockWidget(Manager, "Second");
+	auto Area = Manager.addDockWidget(CenterDockWidgetArea, First);
+	Manager.addDockWidgetTabToArea(Second, Area);
+	Manager.show();
+	QApplication::processEvents();
+	Manager.setDockWidgetFocused(First);
+	QCOMPARE(Manager.focusedDockWidget(), First);
+	const auto State = Manager.saveState();
+	Manager.setDockWidgetFocused(Second);
+	QCOMPARE(Manager.focusedDockWidget(), Second);
+	QVERIFY(Manager.restoreState(State));
+	QCOMPARE(Manager.focusedDockWidget(), First);
+	QVERIFY(First->property("focused").toBool());
+	QVERIFY(!Second->property("focused").toBool());
+}
 
 void TabDragTest::inactiveTab_clickActivatesOnlyOnRelease()
 {
@@ -974,8 +1119,23 @@ void TabDragTest::floatingDrag_enteringAnotherHeaderPreviewsUntilRelease()
 }
 
 
+void TabDragTest::floatingDrag_singleTabSourceUsesLiveTabSnapshot_data()
+{
+	QTest::addColumn<bool>("FloatingSource");
+	QTest::newRow("docked") << false;
+	QTest::newRow("floating") << true;
+}
+
+
 void TabDragTest::floatingDrag_singleTabSourceUsesLiveTabSnapshot()
 {
+	QFETCH(bool, FloatingSource);
+	struct ConfigRestorer
+	{
+		CDockManager::ConfigFlags Flags = CDockManager::configFlags();
+		~ConfigRestorer() { CDockManager::setConfigFlags(Flags); }
+	} RestoreConfig;
+	CDockManager::setConfigFlag(CDockManager::AlwaysShowTabs, true);
 	CDockManager Manager;
 	Manager.resize(1000, 500);
 	auto Source = makeDockWidget(Manager, QStringLiteral("Render Graph"));
@@ -986,6 +1146,16 @@ void TabDragTest::floatingDrag_singleTabSourceUsesLiveTabSnapshot()
 		Target, SourceArea);
 	Manager.addDockWidgetTabToArea(TargetSecond, TargetArea);
 	TargetArea->setCurrentDockWidget(Target);
+	QPointer<CFloatingDockContainer> SourceWindow;
+	if (FloatingSource)
+	{
+		Source->setFloating();
+		SourceArea = Source->dockAreaWidget();
+		SourceWindow = Source->dockContainer()->floatingWidget();
+		QVERIFY(SourceWindow);
+		SourceWindow->resize(500, 400);
+		SourceWindow->move(1100, 100);
+	}
 	Manager.show();
 	QApplication::processEvents();
 
@@ -1050,6 +1220,15 @@ void TabDragTest::floatingDrag_singleTabSourceUsesLiveTabSnapshot()
 	QCOMPARE(TargetArea->dockWidget(2), TargetSecond);
 	QCOMPARE(TargetTabBar->externalTabDragPreviewWidth(), 0);
 	QVERIFY(tabSlidesSettled(TargetTabBar));
+	if (FloatingSource)
+	{
+		// Redocking the last tab must retire the empty source window without
+		// invalidating the moved dock or its live tab.
+		QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+		QVERIFY(SourceWindow.isNull());
+		QCOMPARE(Source->dockAreaWidget(), TargetArea);
+		QCOMPARE(Source->tabWidget(), SourceTab);
+	}
 }
 
 

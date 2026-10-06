@@ -17,6 +17,8 @@
 #include <QPainter>
 #include <QKeyEvent>
 #include <QPointer>
+#include <QLabel>
+#include <QTimer>
 
 #include "DockWidget.h"
 #include "DockWidgetTab.h"
@@ -31,6 +33,36 @@
 
 namespace ads
 {
+
+// Opt-in diagnostics for native docking failures that do not reproduce with
+// the offscreen platform. No document content is included.
+static void traceDockTabs(CDockManager* Manager, const char* Phase)
+{
+	qInfo() << "[qtads-tabs]" << Phase;
+	for (auto Container : Manager->dockContainers())
+	{
+		for (int i = 0; i < Container->dockAreaCount(); ++i)
+		{
+			auto Area = Container->dockArea(i);
+			auto Bar = Area->titleBar()->tabBar();
+			qInfo() << "[qtads-area]" << Container << Area
+				<< "floating" << Container->isFloating()
+				<< "docks/tabs/current" << Area->dockWidgetsCount()
+				<< Bar->count() << Area->currentIndex()
+				<< "preview" << Bar->externalTabDragPreviewWidth();
+			for (auto Dock : Area->dockWidgets())
+			{
+				auto Tab = Dock->tabWidget();
+				auto Label = Tab->findChild<QLabel*>("dockWidgetTabLabel");
+				qInfo() << "[qtads-tab]" << Dock->objectName() << Tab
+					<< "visible/active" << Tab->isVisible() << Tab->isActiveTab()
+					<< "geometry" << Tab->geometry()
+					<< "labelVisible" << (Label && Label->isVisible())
+					<< "labelGeometry" << (Label ? Label->geometry() : QRect());
+			}
+		}
+	}
+}
 
 /**
  * Private data class (pimpl)
@@ -788,6 +820,18 @@ void CFloatingDragPreview::startFloating(const QPoint &DragStartMousePos,
 void CFloatingDragPreview::finishDragging()
 {
 	ADS_PRINT("CFloatingDragPreview::finishDragging");
+	if (qEnvironmentVariableIntValue("WIZ_QTADS_TRACE") && d->DockManager)
+	{
+		auto Manager = d->DockManager.data();
+		qInfo() << "[qtads-drop]" << d->Content.data()
+			<< "target" << d->DropContainer.data()
+			<< "cursor" << d->cursorPos()
+			<< "areaDrop" << Manager->dockAreaOverlay()
+				->visibleDropAreaUnderCursor(d->cursorPos());
+		traceDockTabs(Manager, "before-drop");
+		QTimer::singleShot(100, Manager,
+			[Manager] { traceDockTabs(Manager, "after-drop"); });
+	}
 	if (d->Canceled)
 	{
 		return;
