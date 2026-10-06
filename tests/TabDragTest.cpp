@@ -169,6 +169,12 @@ void TabDragTest::floatingSplit_recombineTabs()
 		using CDockManager::containerOverlay;
 	};
 	TestManager Manager;
+	// Establish the parent window before creating a floating QDockWidget.
+	// Qt 6 on Linux otherwise hides its content during the parent's first show.
+	Manager.resize(300, 300);
+	Manager.move(900, 100);
+	Manager.show();
+	QApplication::processEvents();
 	auto First = makeDockWidget(Manager, "First");
 	auto Second = makeDockWidget(Manager, "Second");
 	if (NativeContent)
@@ -182,13 +188,13 @@ void TabDragTest::floatingSplit_recombineTabs()
 	Floating->resize(700, 700);
 	// Offscreen platforms do not reliably report native window stacking.
 	// Keep the manager outside the floating window so hit testing is unambiguous.
-	Manager.resize(300, 300);
-	Manager.move(900, 100);
 	Floating->move(50, 50);
-	Manager.show();
 	Floating->show();
 	QApplication::processEvents();
 	auto Container = Floating->dockContainer();
+	QVERIFY(Floating->isVisible());
+	QVERIFY(Container->isVisible());
+	QVERIFY(Area->isVisible());
 	// Split using the same tab gesture as the reported sequence.
 	auto SplitTab = Second->tabWidget();
 	const QPoint SplitPress = SplitTab->mapToGlobal(SplitTab->rect().center());
