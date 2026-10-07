@@ -30,6 +30,8 @@
 //============================================================================
 //                                   INCLUDES
 //============================================================================
+#include "ads_version.h"
+
 #include <QPair>
 #include <QtCore/QtGlobal>
 #include <QPixmap>
@@ -168,9 +170,9 @@ static const bool Restore = false;
 static const char* const ClosedProperty = "close";
 static const char* const DirtyProperty = "dirty";
 static const char* const LocationProperty = "Location";
-extern const int FloatingWidgetDragStartEvent;
-extern const int DockedWidgetDragStartEvent;
-extern const int FloatingWidgetDragCancelEvent;
+extern ADS_EXPORT const int FloatingWidgetDragStartEvent;
+extern ADS_EXPORT const int DockedWidgetDragStartEvent;
+extern ADS_EXPORT const int FloatingWidgetDragCancelEvent;
 
 /**
  * Checks a floating-window drag's radial distance. Both positions must use
