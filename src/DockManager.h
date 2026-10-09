@@ -30,6 +30,7 @@
 **               extended the friend-CDockOverlay justification comment.
 **   2026-07-01  Added CDockManager::setDropOverlaysEnabled() so applications
 **               can gate redocking/drop-target UI during a live drag.
+**   2026-10-09  Added CDockManager::setFloatingDropPreviewResizePredicate().
 ******************************************************************************/
 
 
@@ -48,6 +49,7 @@
 #include "DockContainerWidget.h"
 #include "DockWidget.h"
 #include "FloatingDockContainer.h"
+#include <functional>
 
 
 QT_FORWARD_DECLARE_CLASS(QSettings)
@@ -168,6 +170,8 @@ protected:
 	 * Overlay for dock areas
 	 */
 	CDockOverlay* dockAreaOverlay() const;
+
+	bool floatingDropPreviewResizeEnabled(CFloatingDockContainer* FloatingWidget) const;
 
 
 	/**
@@ -511,6 +515,13 @@ public:
 	 * enabled for drags managed by this dock manager.
 	 */
 	bool dropOverlaysEnabled() const;
+
+	/**
+	 * Controls resizing a floating window to the highlighted rectangle before
+	 * docking. A false result skips the resize and its event-loop dispatch.
+	 */
+	void setFloatingDropPreviewResizePredicate(
+		std::function<bool(CFloatingDockContainer*)> Predicate);
 
 	/**
 	 * Sets the value for the given config parameter
