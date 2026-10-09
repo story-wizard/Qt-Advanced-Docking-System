@@ -22,6 +22,7 @@
 **               HalfPanelDropZones is enabled.
 **   2026-07-01  Added a per-manager drop-overlay gate for applications that
 **               require a live modifier before redocking.
+**   2026-10-09  Stored the floating drop-preview resize predicate.
 ******************************************************************************/
 
 
@@ -148,6 +149,7 @@ struct DockManagerPrivate
 	QSize ToolBarIconSizeFloating = QSize(24, 24);
 	CDockWidget::DockWidgetFeatures LockedDockWidgetFeatures;
 	bool DropOverlaysEnabled = true;
+	std::function<bool(CFloatingDockContainer*)> FloatingDropPreviewResizePredicate;
 	QSharedPointer<ads::CDockComponentsFactory> ComponentFactory {ads::CDockComponentsFactory::factory()};
 	bool CurrentStylesheetDark;
 
@@ -901,6 +903,20 @@ void CDockManager::setDropOverlaysEnabled(bool enabled)
 bool CDockManager::dropOverlaysEnabled() const
 {
 	return d->DropOverlaysEnabled;
+}
+
+
+void CDockManager::setFloatingDropPreviewResizePredicate(
+	std::function<bool(CFloatingDockContainer*)> Predicate)
+{
+	d->FloatingDropPreviewResizePredicate = std::move(Predicate);
+}
+
+
+bool CDockManager::floatingDropPreviewResizeEnabled(CFloatingDockContainer* FloatingWidget) const
+{
+	return !d->FloatingDropPreviewResizePredicate
+		|| d->FloatingDropPreviewResizePredicate(FloatingWidget);
 }
 
 
