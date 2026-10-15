@@ -14,6 +14,10 @@
  **
  ** You should have received a copy of the GNU Lesser General Public
  ** License along with this library; If not, see <http://www.gnu.org/licenses/>.
+**
+** Modifications by Wizard NLE (Story Wizard, Inc.):
+**   2026-10-09  Skip the pre-drop resize to the highlighted rectangle when
+**               the floating drop-preview resize predicate declines it.
  ******************************************************************************/
 
 //============================================================================
@@ -588,7 +592,8 @@ void FloatingDockContainerPrivate::titleMouseReleaseEvent()
 
 		// Do not resize if we drop into an autohide sidebar area to preserve
 		// the dock area size for the initial size of the auto hide area
-		if (!ads::internal::isSideBarArea(ResolvedDropArea))
+		if (!ads::internal::isSideBarArea(ResolvedDropArea)
+		 && DockManager->floatingDropPreviewResizeEnabled(_this))
 		{
 			// Resize the floating widget to the size of the highlighted drop area
 			// rectangle

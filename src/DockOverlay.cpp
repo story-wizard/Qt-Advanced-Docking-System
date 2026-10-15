@@ -31,6 +31,8 @@
 **               intersect in the dock-area defer logic.
 **   2026-05-08  Removed unused <iostream> include and added probe-call
 **               documentation to the dock-area defer logic.
+**   2026-10-09  Consult the drop-preview predicate synchronously on hover,
+**               before painting the stock drop preview.
 ******************************************************************************/
 
 
@@ -81,6 +83,8 @@ struct DockOverlayPrivate
 	qint64 DragPreviewHeaderCacheKey = 0;
 	QPointer<QWidget> TargetWidget;
 	DockWidgetArea LastLocation = InvalidDockWidgetArea;
+	std::function<bool(QWidget*, DockWidgetArea)> DropPreviewPredicate;
+	bool DropPreviewAllowed = true;
 	bool DropPreviewEnabled = true;
 	bool DropPreviewOutlineOnly = false;
 	CDockOverlay::eMode Mode = CDockOverlay::ModeDockAreaOverlay;
@@ -837,7 +841,10 @@ DockWidgetArea CDockOverlay::showOverlay(QWidget* target, const QPoint& GlobalPo
 	{
 		// Hint: We could update geometry of overlay here.
 		DockWidgetArea da = dropAreaUnderCursor(GlobalPos);
-		if (da != d->LastLocation)
+		const bool WasAllowed = d->DropPreviewAllowed;
+		d->DropPreviewAllowed = !d->DropPreviewPredicate
+			|| d->DropPreviewPredicate(target, da);
+		if (da != d->LastLocation || WasAllowed != d->DropPreviewAllowed)
 		{
 			repaint();
 			d->LastLocation = da;
@@ -847,6 +854,7 @@ DockWidgetArea CDockOverlay::showOverlay(QWidget* target, const QPoint& GlobalPo
 
 	d->TargetWidget = target;
 	d->LastLocation = InvalidDockWidgetArea;
+	d->DropPreviewAllowed = !d->DropPreviewPredicate;
 
 	// Move it over the target.
 	hide();
@@ -870,7 +878,11 @@ DockWidgetArea CDockOverlay::showOverlay(QWidget* target, const QPoint& GlobalPo
 	}
 	d->Cross->updatePosition();
 	d->Cross->updateOverlayIcons();
-	return dropAreaUnderCursor(GlobalPos);
+	const auto Area = dropAreaUnderCursor(GlobalPos);
+	d->DropPreviewAllowed = !d->DropPreviewPredicate
+		|| d->DropPreviewPredicate(target, Area);
+	update();
+	return Area;
 }
 
 
@@ -957,6 +969,15 @@ bool CDockOverlay::dropPreviewOutlineOnly() const
 }
 
 
+void CDockOverlay::setDropPreviewPredicate(
+	std::function<bool(QWidget*, DockWidgetArea)> Predicate)
+{
+	d->DropPreviewPredicate = std::move(Predicate);
+	d->DropPreviewAllowed = !d->DropPreviewPredicate;
+	update();
+}
+
+
 //============================================================================
 void CDockOverlay::enableDropPreview(bool Enable)
 {
@@ -982,7 +1003,7 @@ void CDockOverlay::paintEvent(QPaintEvent* event)
 	Q_UNUSED(event);
 
 	// Draw rect based on location
-	if (!d->DropPreviewEnabled)
+	if (!d->DropPreviewEnabled || !d->DropPreviewAllowed)
 	{
 		d->DropAreaRect = QRect();
 		return;

@@ -26,6 +26,8 @@
 **               container overlay claims an outer edge-band, and made the
 **               dock-area overlay defer to that band so outer-dock gestures
 **               are reachable.
+**   2026-10-09  Added CDockOverlay::setDropPreviewPredicate() and the
+**               ADS_HAS_DROP_PREVIEW_POLICIES feature macro.
 ******************************************************************************/
 
 
@@ -36,8 +38,12 @@
 #include <QHash>
 #include <QRect>
 #include <QFrame>
+#include <functional>
 
 #include "ads_globals.h"
+
+// Lets applications detect the drop-preview policies at compile time.
+#define ADS_HAS_DROP_PREVIEW_POLICIES 1
 
 QT_FORWARD_DECLARE_CLASS(QGridLayout)
 QT_FORWARD_DECLARE_CLASS(QPixmap)
@@ -186,6 +192,13 @@ public:
 	 * the future area of the dropped widget
 	 */
 	void enableDropPreview(bool Enable);
+
+	/**
+	 * Consulted synchronously on hover before painting the stock drop preview.
+	 * Target indicators and drop hit testing remain available.
+	 */
+	void setDropPreviewPredicate(
+		std::function<bool(QWidget*, DockWidgetArea)> Predicate);
 
 	/**
 	 * Returns true if drop preview is enabled
