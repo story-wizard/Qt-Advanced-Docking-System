@@ -32,10 +32,268 @@
 #include <QDebug>
 #include <QChildEvent>
 #include <QVariant>
+#include <QMouseEvent>
+#include <QPointer>
+#include <QPainter>
+#include <QVariantAnimation>
+#include <QTimer>
+#include <QSplitterHandle>
 #include "DockAreaWidget.h"
 
 namespace ads
 {
+namespace
+{
+// Keep the gesture in QtADS: only docking splitters participate, never splitters
+// inside panel content. Qt still owns clamping, splitterMoved and serialization.
+class IntersectionHandle : public QSplitterHandle
+{
+    struct Target
+    {
+        QPointer<IntersectionHandle> handle;
+        QPoint offset;
+    };
+    QList<Target> targets;
+    bool intersectionActive = false;
+    bool intersectionHovered = false;
+    bool pointerHovered = false;
+    bool pressed = false;
+    QVariantAnimation highlightAnimation;
+    QTimer highlightDelay;
+    qreal highlightOpacity = 0.0;
+    bool highlightVisible = false;
+
+    void updateHighlight()
+    {
+        const bool visible = intersectionActive || intersectionHovered || pointerHovered || pressed;
+        if (visible == highlightVisible) return;
+        highlightVisible = visible;
+        highlightDelay.stop();
+        // Delay only a fresh visual highlight; pointer routing and splitter
+        // movement never wait for this timer. Reverse an existing fade at once.
+        if (visible && highlightOpacity <= 0.0)
+        {
+            highlightDelay.start();
+            return;
+        }
+        animateHighlight();
+    }
+
+    void animateHighlight()
+    {
+        highlightAnimation.stop();
+        highlightAnimation.setStartValue(highlightOpacity);
+        highlightAnimation.setEndValue(highlightVisible ? 1.0 : 0.0);
+        highlightAnimation.start();
+    }
+    QList<QPointer<IntersectionHandle>> previewTargets;
+
+    void setPreview(const QList<IntersectionHandle*>& handles)
+    {
+        QList<QPointer<IntersectionHandle>> next;
+        for (auto* handle : handles) next.append(handle);
+        if (next == previewTargets) return;
+        for (const auto& handle : previewTargets)
+            if (handle)
+            {
+                handle->intersectionHovered = false;
+                handle->updateHighlight();
+            }
+        previewTargets = next;
+        for (const auto& handle : previewTargets)
+            if (handle)
+            {
+                handle->intersectionHovered = true;
+                handle->updateHighlight();
+            }
+    }
+
+    void clearTargets()
+    {
+        const auto previous = targets;
+        targets.clear();
+        for (const auto& target : previous)
+            if (auto* h = target.handle.data())
+            {
+                h->intersectionActive = false;
+                h->updateHighlight();
+            }
+    }
+
+    QList<IntersectionHandle*> nearby(const QPoint& global) const
+    {
+        auto* root = splitter();
+        while (auto* parent = qobject_cast<CDockSplitter*>(root->parentWidget()))
+            root = parent;
+        QList<IntersectionHandle*> result;
+        // Walk only direct splitter children, never docking-like widgets inside
+        // panel content. Breadth-first order moves ancestors before descendants.
+        QList<CDockSplitter*> splitters{static_cast<CDockSplitter*>(root)};
+        for (int n = 0; n < splitters.size(); ++n)
+            for (int i = 0; i < splitters[n]->count(); ++i)
+                if (auto* child = qobject_cast<CDockSplitter*>(splitters[n]->widget(i)))
+                    splitters.append(child);
+        bool horizontal = false, vertical = false;
+        for (auto* s : splitters)
+            for (int i = 1; i < s->count(); ++i)
+            {
+                auto* h = static_cast<IntersectionHandle*>(s->handle(i));
+                if (!h->isVisible() || !h->isEnabled()) continue;
+                const QRect bounds(h->mapToGlobal(QPoint()), h->size());
+                // Reach the opposite branch of a cross even when the platform
+                // draws the intervening handle wider than the hover tolerance.
+                const int margin = qMax(6, splitter()->handleWidth() + 1);
+                if (!bounds.adjusted(-margin, -margin, margin, margin).contains(global)) continue;
+                result.append(h);
+                horizontal |= h->orientation() == Qt::Horizontal;
+                vertical |= h->orientation() == Qt::Vertical;
+            }
+        return horizontal && vertical ? result : QList<IntersectionHandle*>();
+    }
+
+    void finish()
+    {
+        pressed = false;
+        clearTargets();
+        updateHighlight();
+        if (mouseGrabber() == this) releaseMouse();
+        setCursor(orientation() == Qt::Horizontal ? Qt::SplitHCursor : Qt::SplitVCursor);
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        QSplitterHandle::paintEvent(event);
+        if (highlightOpacity > 0.0)
+        {
+            QPainter painter(this);
+            painter.setOpacity(highlightOpacity);
+            painter.fillRect(rect(), palette().color(QPalette::Active, QPalette::Highlight));
+        }
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton)
+        {
+            pressed = true;
+            updateHighlight();
+            const auto global = internal::globalPositionOf(event);
+            const auto handles = nearby(global);
+            setPreview({});
+            for (auto* h : handles)
+            {
+                targets.append({h, global - h->mapToGlobal(QPoint())});
+                h->intersectionActive = true;
+                h->updateHighlight();
+            }
+            if (!targets.isEmpty())
+            {
+                setCursor(Qt::SizeAllCursor);
+                grabMouse();
+                event->accept();
+                return;
+            }
+        }
+        QSplitterHandle::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        pointerHovered = rect().contains(event->pos());
+        updateHighlight();
+        if (!targets.isEmpty())
+        {
+            if (!(event->buttons() & Qt::LeftButton)) { finish(); return; }
+            const auto activeTargets = targets;
+            QPointer<IntersectionHandle> guard(this);
+            for (const auto& target : activeTargets)
+            {
+                auto* h = target.handle.data();
+                if (!h || !h->isVisible()) continue;
+                const auto local = h->splitter()->mapFromGlobal(internal::globalPositionOf(event) - target.offset);
+                // QSplitterHandle mirrors horizontal positions at the right edge in RTL.
+                const int rtlOffset = h->orientation() == Qt::Horizontal
+                    && h->splitter()->isRightToLeft() ? h->width() : 0;
+                h->moveSplitter(h->orientation() == Qt::Horizontal ? local.x() + rtlOffset : local.y());
+                // splitterMoved observers can replace a layout synchronously.
+                if (!guard) return;
+                if (targets.isEmpty()) break;
+            }
+            event->accept();
+            return;
+        }
+        const auto handles = nearby(internal::globalPositionOf(event));
+        setPreview(handles);
+        setCursor(handles.isEmpty()
+            ? (orientation() == Qt::Horizontal ? Qt::SplitHCursor : Qt::SplitVCursor)
+            : Qt::SizeAllCursor);
+        QSplitterHandle::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton) { pressed = false; updateHighlight(); }
+        if (event->button() == Qt::LeftButton && !targets.isEmpty())
+        {
+            finish();
+            event->accept();
+            return;
+        }
+        QSplitterHandle::mouseReleaseEvent(event);
+    }
+
+    bool event(QEvent* event) override
+    {
+        if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide
+            || event->type() == QEvent::WindowDeactivate)
+        {
+            pressed = false;
+            pointerHovered = false;
+            clearTargets();
+            setPreview({});
+            updateHighlight();
+        }
+        else if (event->type() == QEvent::Leave)
+        {
+            pointerHovered = false;
+            setPreview({});
+            updateHighlight();
+        }
+        else if (event->type() == QEvent::Enter)
+        {
+            pointerHovered = true;
+            updateHighlight();
+        }
+        return QSplitterHandle::event(event);
+    }
+
+public:
+    ~IntersectionHandle() override { clearTargets(); setPreview({}); }
+
+    IntersectionHandle(Qt::Orientation orientation, QSplitter* parent)
+        : QSplitterHandle(orientation, parent)
+    {
+        setMouseTracking(true);
+        setProperty("ads-splitter-highlight-managed", true);
+        highlightDelay.setSingleShot(true);
+        highlightDelay.setInterval(200);
+        connect(&highlightDelay, &QTimer::timeout, this, [this] { animateHighlight(); });
+        highlightAnimation.setDuration(120);
+        highlightAnimation.setEasingCurve(QEasingCurve::OutCubic);
+        connect(&highlightAnimation, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
+            highlightOpacity = value.toReal();
+            update();
+        });
+    }
+};
+}
+
+QSplitterHandle* CDockSplitter::createHandle()
+{
+    return new IntersectionHandle(orientation(), this);
+}
+
 /**
  * Private dock splitter data
  */

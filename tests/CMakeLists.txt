@@ -44,3 +44,5 @@ endfunction()
 add_ads_qt_test(QuadrantHitTestTest QuadrantHitTestTest.cpp)
 add_ads_qt_test(OverlayGateTest OverlayGateTest.cpp)
 add_ads_qt_test(TabDragTest TabDragTest.cpp)
+
+add_ads_qt_test(IntersectionResizeTest IntersectionResizeTest.cpp)

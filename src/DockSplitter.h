@@ -48,6 +48,9 @@ private:
 	DockSplitterPrivate* d;
 	friend struct DockSplitterPrivate;
 
+protected:
+    QSplitterHandle* createHandle() override;
+
 public:
 	CDockSplitter(QWidget *parent = Q_NULLPTR);
 	CDockSplitter(Qt::Orientation orientation, QWidget *parent = Q_NULLPTR);
