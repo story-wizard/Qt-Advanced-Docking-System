@@ -86,9 +86,8 @@ class DockSplitterHandle : public QSplitterHandle
     {
         QList<QPointer<DockSplitterHandle>> next;
         for (auto* handle : handles) next.append(handle);
-        if (next == previewTargets) return;
         for (const auto& handle : previewTargets)
-            if (handle)
+            if (handle && !next.contains(handle))
             {
                 handle->intersectionHovered = false;
                 handle->updateHighlight();
@@ -248,6 +247,7 @@ protected:
             || event->type() == QEvent::WindowDeactivate)
         {
             pressed = false;
+            intersectionHovered = false;
             pointerHovered = false;
             clearTargets();
             setPreview({});

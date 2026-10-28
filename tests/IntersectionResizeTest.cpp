@@ -195,6 +195,27 @@ private slots:
         QTest::mouseRelease(handle, Qt::LeftButton);
     }
 
+    void hiddenPreviewResets()
+    {
+        CDockSplitter root(Qt::Horizontal);
+        auto* branch = new CDockSplitter(Qt::Vertical);
+        branch->addWidget(panel()); branch->addWidget(panel());
+        root.addWidget(branch); root.addWidget(panel());
+        root.resize(640, 480); root.show(); root.setSizes({320, 320}); QTest::qWait(10);
+        auto* handle = root.handle(1);
+        auto* target = branch->handle(1);
+        const QPoint start(handle->mapToGlobal(handle->rect().center()).x(),
+            target->mapToGlobal(target->rect().center()).y());
+        auto color = [target] { return target->grab().toImage().pixelColor(1, 1); };
+        const auto blue = target->palette().color(QPalette::Active, QPalette::Highlight);
+        move(handle, start, Qt::NoButton);
+        QTRY_COMPARE(color(), blue);
+        target->hide(); target->show();
+        QTRY_VERIFY(color() != blue);
+        move(handle, start, Qt::NoButton);
+        QTRY_COMPARE(color(), blue);
+    }
+
     void deferredJunction()
     {
         for (bool rtl : {false, true}) {
