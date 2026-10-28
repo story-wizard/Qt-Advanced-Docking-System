@@ -47,6 +47,10 @@ class ADS_EXPORT CDockSplitter : public QSplitter
 private:
 	DockSplitterPrivate* d;
 	friend struct DockSplitterPrivate;
+    friend class DockSplitterHandle;
+
+protected:
+    QSplitterHandle* createHandle() override;
 
 public:
 	CDockSplitter(QWidget *parent = Q_NULLPTR);
