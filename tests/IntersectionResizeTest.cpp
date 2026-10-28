@@ -103,7 +103,6 @@ private slots:
         QTRY_VERIFY(centerColor(handle) != highlight);
         QTRY_VERIFY(centerColor(left->handle(1)) != highlight);
         if (right) QTRY_VERIFY(centerColor(right->handle(1)) != highlight);
-        // The normal Qt splitter state stores the new sizes without extra state.
         const auto saved = root.saveState();
         const auto sizes = root.sizes();
         root.setSizes({300, 300});
@@ -164,8 +163,8 @@ private slots:
         move(h, start + QPoint(20, 30), Qt::LeftButton);
         QCOMPARE(top->handle(1)->mapToGlobal(QPoint()).x(), oldX + 20);
         QCOMPARE(h->mapToGlobal(QPoint()).y(), oldY + 30);
-        QCOMPARE(bottom->sizes(), bottomSizes); // An offset branch is independent.
-        delete top->widget(1); // Layout mutations must not leave a dangling handle.
+        QCOMPARE(bottom->sizes(), bottomSizes);
+        delete top->widget(1);
         QCoreApplication::processEvents();
         move(h, start + QPoint(30, 40), Qt::LeftButton);
         QTest::mouseRelease(h, Qt::LeftButton);
@@ -194,6 +193,48 @@ private slots:
         QVERIFY(pixels.pixelColor(pixels.rect().center()).rgba()
             != handle->palette().color(QPalette::Active, QPalette::Highlight).rgba());
         QTest::mouseRelease(handle, Qt::LeftButton);
+    }
+
+    void deferredJunction()
+    {
+        for (bool rtl : {false, true}) {
+            CDockSplitter root(Qt::Horizontal);
+            root.setLayoutDirection(rtl ? Qt::RightToLeft : Qt::LeftToRight);
+            auto* branch = new CDockSplitter(Qt::Vertical);
+            branch->addWidget(panel()); branch->addWidget(panel());
+            root.addWidget(branch); root.addWidget(panel());
+            root.setOpaqueResize(false); branch->setOpaqueResize(false);
+            root.resize(640, 480); root.show(); root.setSizes({320, 320}); QTest::qWait(10);
+            auto* handle = root.handle(1);
+            const QPoint start(handle->mapToGlobal(handle->rect().center()).x(),
+                branch->handle(1)->mapToGlobal(branch->handle(1)->rect().center()).y());
+            const auto rootSizes = root.sizes(), branchSizes = branch->sizes();
+            const QPoint before(handle->x(), branch->handle(1)->y());
+            const QPoint end = start + QPoint(20, 15);
+            QTest::mousePress(handle, Qt::LeftButton, Qt::NoModifier, handle->mapFromGlobal(start));
+            move(handle, end, Qt::LeftButton);
+            QCOMPARE(root.sizes(), rootSizes); QCOMPARE(branch->sizes(), branchSizes);
+            QTest::mouseRelease(handle, Qt::LeftButton, Qt::NoModifier, handle->mapFromGlobal(end));
+            QCOMPARE(QPoint(handle->x(), branch->handle(1)->y()), before + QPoint(20, 15));
+        }
+    }
+
+    void customHandlesAreExcluded()
+    {
+        struct CustomSplitter : CDockSplitter {
+            CustomSplitter() : CDockSplitter(Qt::Vertical) {}
+            QSplitterHandle* createHandle() override { return new QSplitterHandle(orientation(), this); }
+        };
+        CDockSplitter root(Qt::Horizontal);
+        auto* branch = new CustomSplitter;
+        branch->addWidget(panel()); branch->addWidget(panel());
+        root.addWidget(branch); root.addWidget(panel());
+        root.resize(640, 480); root.show(); QTest::qWait(10);
+        auto* handle = root.handle(1);
+        const QPoint start(handle->mapToGlobal(handle->rect().center()).x(),
+            branch->handle(1)->mapToGlobal(branch->handle(1)->rect().center()).y());
+        move(handle, start, Qt::NoButton);
+        QCOMPARE(handle->cursor().shape(), Qt::SplitHCursor);
     }
 
     void ordinaryBoundary()
