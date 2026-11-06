@@ -519,6 +519,30 @@ private slots:
         for (auto *dock : {a,b,c}) dock->removeEventFilter(this);
     }
 
+    void restoreHidesReusedGroupWhosePanelsCloseOrFloat()
+    {
+        CDockManager manager;
+        manager.setPersistentDockWidgetHostsEnabled(true);
+        auto *main = new CDockWidget("Main"), *side = new CDockWidget("Side"), *moving = new CDockWidget("Moving");
+        main->setWidget(new QLineEdit("Main")); side->setWidget(new QLineEdit("Side"));
+        moving->setWidget(new QLineEdit("Moving"));
+        auto *mainArea = manager.addDockWidget(LeftDockWidgetArea, main);
+        auto *sideArea = manager.addDockWidget(RightDockWidgetArea, side, mainArea);
+        manager.resize(1200, 800); manager.show(); settle();
+        side->toggleView(false);
+        manager.addDockWidgetFloating(moving); settle();
+        const auto state = manager.saveState();
+        side->toggleView(true);
+        manager.addDockWidget(CenterDockWidgetArea, moving, sideArea); settle();
+        sideArea->setCurrentDockWidget(moving); settle();
+        QVERIFY(sideArea->isVisible());
+        QVERIFY(manager.restoreState(state)); settle();
+        QVERIFY(side->isClosed());
+        QVERIFY(moving->isInFloatingContainer());
+        for (auto *area : manager.findChildren<CDockAreaWidget*>())
+            QVERIFY(!area->isVisible() || area->openDockWidgetsCount() > 0);
+    }
+
     void floatingAndReturningChangesHostOnce()
     {
         CDockManager manager;
