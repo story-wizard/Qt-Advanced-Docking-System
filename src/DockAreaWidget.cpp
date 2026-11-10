@@ -1248,7 +1248,7 @@ bool CDockAreaWidget::restoreState(CDockingStateReader& s, CDockAreaWidget*& Cre
         // removes them directly. This also preserves source-area identity for
         // later groups and avoids exposing an intermediate selected tab.
     }
-    if (!Reuse || !Container->isVisible())
+    if (!Reuse || !Container->isVisible() || !ClosedStates.contains(false))
         DockArea->hide();
     for (int i = 0; i < Widgets.size(); ++i)
     {
