@@ -139,6 +139,31 @@ private slots:
         QCOMPARE(floating->widget(), content.data());
     }
 
+    void restoredFloatingWindowRepaints()
+    {
+        CDockManager manager;
+        manager.setPersistentDockWidgetHostsEnabled(true);
+        manager.setPreparedLayoutsEnabled(true);
+        manager.resize(800, 600);
+        manager.show();
+        auto *main = new CDockWidget("Main");
+        main->setWidget(new QLineEdit("Main"));
+        manager.addDockWidget(LeftDockWidgetArea, main);
+        auto *preview = new CDockWidget("Preview");
+        preview->setWidget(new QLineEdit("Preview"));
+        manager.addDockWidget(RightDockWidgetArea, preview);
+        const auto docked = manager.saveState();
+        preview->setFloating();
+        settle();
+        const auto withFloating = manager.saveState();
+        QVERIFY(manager.restoreState(docked));
+        settle();
+        QVERIFY(manager.restoreState(withFloating));
+        settle();
+        QVERIFY(preview->isFloating());
+        QVERIFY(preview->window()->updatesEnabled());
+    }
+
     void activationChangesPreserveFloatingWindows()
     {
         CDockManager manager;

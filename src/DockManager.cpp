@@ -1213,7 +1213,12 @@ bool CDockManager::restoreState(const QByteArray &state, int version)
         }
     }
     if (UpdatesWereEnabled)
+    {
         setUpdatesEnabled(true);
+        for (const auto &Floating : d->FloatingWidgets)
+            if (Floating)
+                Floating->setUpdatesEnabled(true);
+    }
 	Q_EMIT stateRestored();
 	if (Result && !d->RestoredFocusedDockWidget.isEmpty())
 	{
